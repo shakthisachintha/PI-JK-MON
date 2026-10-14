@@ -1,78 +1,33 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
 
-import { api, type CellHistory, type History as HistoryData, type HistoryPoint } from "@/lib/api";
+import { api, type HistoryPoint } from "@/lib/api";
 import { baseTimeOptions, series, withGaps } from "@/lib/chartSetup";
-import { usePolling, useChartColors, type ChartColors } from "@/lib/hooks";
+import { useChartColors, type ChartColors } from "@/lib/hooks";
+import { useHistory, type HistoryData } from "@/lib/queries";
+import {
+  DEFAULT_RANGE,
+  EXPORT_MAX_SPAN,
+  RANGE_KEYS,
+  readHash,
+  toLocalInput,
+  windowFor,
+  writeHash,
+  type RangeKey,
+  type RangeSel,
+} from "@/lib/range";
 
-const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
-const PRESETS = { "1h": HOUR, "6h": 6 * HOUR, "24h": DAY, "7d": 7 * DAY, "30d": 30 * DAY } as const;
-type Preset = keyof typeof PRESETS;
-type RangeKey = Preset | "custom";
-const RANGE_KEYS: RangeKey[] = ["1h", "6h", "24h", "7d", "30d", "custom"];
-const EXPORT_MAX_SPAN = 31 * DAY;
-
-interface RangeSel {
-  key: RangeKey;
-  from?: number; // custom only
-  to?: number;
-}
-
-// --- URL hash: #range=24h or #range=custom&from=<ms>&to=<ms> ---
-
-function readHash(): RangeSel {
-  const h = new URLSearchParams(window.location.hash.slice(1));
-  const key = h.get("range") as RangeKey | null;
-  if (key === "custom") {
-    const from = Number(h.get("from"));
-    const to = Number(h.get("to"));
-    if (from > 0 && to > from) return { key, from, to };
-  } else if (key && key in PRESETS) {
-    return { key };
-  }
-  return { key: "24h" };
-}
-
-function writeHash(sel: RangeSel) {
-  const h = new URLSearchParams({ range: sel.key });
-  if (sel.key === "custom" && sel.from && sel.to) {
-    h.set("from", String(sel.from));
-    h.set("to", String(sel.to));
-  }
-  history.replaceState(null, "", `#${h.toString()}`);
-}
-
-function windowFor(sel: RangeSel): [number, number] {
-  if (sel.key === "custom" && sel.from && sel.to) return [sel.from, sel.to];
-  const now = Date.now();
-  return [now - PRESETS[sel.key as Preset], now];
-}
-
-function toLocalInput(ms: number): string {
-  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60_000);
-  return d.toISOString().slice(0, 16);
-}
-
-// --- component ---
-
-interface Loaded {
-  from: number;
-  to: number;
-  history: HistoryData;
-  cells: CellHistory;
-}
+import { Banner, buttonClass, Card, Empty, SectionHead, Segmented } from "./ui";
 
 export function History() {
   const colors = useChartColors();
-  const [sel, setSel] = useState<RangeSel | null>(null);
-  const [data, setData] = useState<Loaded | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [sel, setSel] = useState<RangeSel | null>(null); // null until the URL hash is read on the client
   const [cellMode, setCellMode] = useState<"cells" | "delta">("cells");
   const [draft, setDraft] = useState<{ from: string; to: string }>({ from: "", to: "" });
+  const query = useHistory(sel);
+  const data = query.data;
 
   useEffect(() => {
     const init = readHash();
@@ -89,54 +44,28 @@ export function History() {
     setSel(next);
   };
 
-  const load = useCallback(async () => {
-    if (!sel) return;
-    const [from, to] = windowFor(sel);
-    setLoading(true);
-    try {
-      const [history, cells] = await Promise.all([api.history(from, to), api.cellHistory(from, to)]);
-      setData({ from, to, history, cells });
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [sel]);
-
-  // Refresh every 60 s for live ranges up to 24 h (spec §9.2).
-  const live = sel !== null && sel.key !== "custom" && PRESETS[sel.key as Preset] <= DAY;
-  usePolling(load, live ? 60_000 : null, [load]);
+  const pickRange = (k: RangeKey) => {
+    if (k !== "custom") return choose({ key: k });
+    const [f, t] = windowFor(sel ?? DEFAULT_RANGE);
+    setDraft({ from: toLocalInput(f), to: toLocalInput(t) });
+    choose({ key: "custom", from: f, to: t });
+  };
 
   const span = data ? data.to - data.from : 0;
 
   return (
-    <section className="card">
-      <div className="section-head">
-        <h2>History</h2>
-        <div className="controls">
-          <div className="segmented" role="group" aria-label="Time range">
-            {RANGE_KEYS.map((k) => (
-              <button
-                key={k}
-                aria-pressed={sel?.key === k}
-                onClick={() => {
-                  if (k === "custom") {
-                    const [f, t] = sel ? windowFor(sel) : windowFor({ key: "24h" });
-                    setDraft({ from: toLocalInput(f), to: toLocalInput(t) });
-                    choose({ key: "custom", from: f, to: t });
-                  } else {
-                    choose({ key: k });
-                  }
-                }}
-              >
-                {k}
-              </button>
-            ))}
-          </div>
+    <Card>
+      <SectionHead title="History">
+        <div className="flex flex-wrap items-center gap-2">
+          <Segmented
+            label="Time range"
+            value={sel?.key}
+            onChange={pickRange}
+            options={RANGE_KEYS.map((k) => ({ value: k, label: k }))}
+          />
           {data ? (
             <a
-              className="btn"
+              className={buttonClass}
               href={api.exportUrl(data.from, data.to)}
               aria-disabled={span > EXPORT_MAX_SPAN}
               title={span > EXPORT_MAX_SPAN ? "CSV export is limited to 31 days" : "Download raw samples as CSV"}
@@ -145,11 +74,11 @@ export function History() {
             </a>
           ) : null}
         </div>
-      </div>
+      </SectionHead>
 
       {sel?.key === "custom" ? (
         <form
-          className="custom-range"
+          className="mb-3 flex flex-wrap items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             const from = new Date(draft.from).getTime();
@@ -159,87 +88,90 @@ export function History() {
         >
           <input
             type="datetime-local"
+            className={buttonClass}
             value={draft.from}
             onChange={(e) => setDraft({ ...draft, from: e.target.value })}
             aria-label="From"
           />
-          <span className="meta">to</span>
+          <span className="text-xs text-muted">to</span>
           <input
             type="datetime-local"
+            className={buttonClass}
             value={draft.to}
             onChange={(e) => setDraft({ ...draft, to: e.target.value })}
             aria-label="To"
           />
-          <button className="btn" type="submit">
+          <button className={buttonClass} type="submit">
             Apply
           </button>
         </form>
       ) : null}
 
-      {error ? <div className="banner error">Could not load history: {error}</div> : null}
+      {query.isError ? (
+        <div className="mb-3">
+          <Banner tone="bad">Could not load history: {query.error.message}</Banner>
+        </div>
+      ) : null}
 
-      <p className="meta" style={{ margin: "0 0 12px" }}>
+      <p className="mb-3 text-xs text-muted">
         {data
           ? `${data.history.points.length} points · ${data.history.bucket_s} s buckets from ${
               data.history.source === "samples" ? "raw samples" : "1-minute rollups"
             }`
           : "Loading…"}
-        {loading && data ? " · refreshing…" : ""}
+        {query.isFetching && data ? " · refreshing…" : ""}
       </p>
 
-      <div className="chart-grid">
-        <ChartCard title="Voltage & SOC">
-          {data ? <VoltageSoc d={data} c={colors} /> : null}
-        </ChartCard>
-        <ChartCard title="Current & power">
-          {data ? <CurrentPower d={data} c={colors} /> : null}
-        </ChartCard>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,520px),1fr))] gap-4">
+        <ChartCard title="Voltage & SOC">{data ? <VoltageSoc d={data} c={colors} /> : null}</ChartCard>
+        <ChartCard title="Current & power">{data ? <CurrentPower d={data} c={colors} /> : null}</ChartCard>
         <ChartCard title="Temperatures">{data ? <Temps d={data} c={colors} /> : null}</ChartCard>
         <ChartCard
           title="Cells"
           extra={
-            <div className="segmented" role="group" aria-label="Cell chart mode">
-              <button aria-pressed={cellMode === "cells"} onClick={() => setCellMode("cells")}>
-                Cells + Δ
-              </button>
-              <button aria-pressed={cellMode === "delta"} onClick={() => setCellMode("delta")}>
-                Δ only
-              </button>
-            </div>
+            <Segmented
+              label="Cell chart mode"
+              value={cellMode}
+              onChange={setCellMode}
+              options={[
+                { value: "cells", label: "Cells + Δ" },
+                { value: "delta", label: "Δ only" },
+              ]}
+            />
           }
         >
           {data ? <Cells d={data} c={colors} mode={cellMode} /> : null}
         </ChartCard>
       </div>
-    </section>
+    </Card>
   );
 }
 
 function ChartCard({ title, extra, children }: { title: string; extra?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="chart-card">
-      <h3>
+    <div>
+      <h3 className="mb-2 flex items-center justify-between gap-2 text-sm font-semibold">
         {title}
         {extra}
       </h3>
-      <div className="chart">{children ?? <div className="empty">Loading…</div>}</div>
+      <div className="relative h-56 sm:h-64">{children ?? <Empty>Loading…</Empty>}</div>
     </div>
   );
 }
 
-function Empty() {
-  return <div className="empty">No data in this range</div>;
+function NoData() {
+  return <Empty>No data in this range</Empty>;
 }
 
-type ChartProps = { d: Loaded; c: ChartColors };
+type ChartProps = { d: HistoryData; c: ChartColors };
 
-function usePoints(d: Loaded) {
+function usePoints(d: HistoryData) {
   return useMemo(() => withGaps<HistoryPoint>(d.history.points, d.history.bucket_s), [d]);
 }
 
 function VoltageSoc({ d, c }: ChartProps) {
   const pts = usePoints(d);
-  if (!d.history.points.length) return <Empty />;
+  if (!d.history.points.length) return <NoData />;
   const base = baseTimeOptions(c, d.from, d.to);
   return (
     <Line
@@ -290,7 +222,7 @@ function VoltageSoc({ d, c }: ChartProps) {
 
 function CurrentPower({ d, c }: ChartProps) {
   const pts = usePoints(d);
-  if (!d.history.points.length) return <Empty />;
+  if (!d.history.points.length) return <NoData />;
   const base = baseTimeOptions(c, d.from, d.to);
   return (
     <Line
@@ -314,7 +246,7 @@ function CurrentPower({ d, c }: ChartProps) {
 
 function Temps({ d, c }: ChartProps) {
   const pts = usePoints(d);
-  if (!d.history.points.length) return <Empty />;
+  if (!d.history.points.length) return <NoData />;
   const base = baseTimeOptions(c, d.from, d.to);
   return (
     <Line
@@ -343,7 +275,7 @@ function cellColor(i: number, n: number, dark: boolean) {
 function Cells({ d, c, mode }: ChartProps & { mode: "cells" | "delta" }) {
   const deltaPts = usePoints(d);
   const cellPts = useMemo(() => withGaps(d.cells.points, d.cells.bucket_s), [d]);
-  if (!d.history.points.length && !d.cells.points.length) return <Empty />;
+  if (!d.history.points.length && !d.cells.points.length) return <NoData />;
   const base = baseTimeOptions(c, d.from, d.to);
   const n = d.cells.cell_count;
   const delta = {

@@ -2,42 +2,10 @@
 
 import type { SystemInfo } from "@/lib/api";
 import { fmt, fmtAgo, fmtDuration, fmtTime } from "@/lib/format";
+import { useSystem } from "@/lib/queries";
 
 import { SignalBars } from "./SignalBars";
-
-type Tone = "" | "ok" | "warn" | "bad";
-
-function Stat({
-  label,
-  value,
-  unit,
-  sub,
-  tone = "",
-  meter,
-}: {
-  label: string;
-  value: React.ReactNode;
-  unit?: string;
-  sub?: React.ReactNode;
-  tone?: Tone;
-  meter?: number | null;
-}) {
-  return (
-    <div className="tile">
-      <div className="label">{label}</div>
-      <div className={`value num tone-${tone}`}>
-        {value}
-        {unit && value !== "–" ? <span className="unit">{unit}</span> : null}
-      </div>
-      {meter !== undefined && meter !== null ? (
-        <div className={`capbar ${tone === "bad" ? "critical" : tone === "warn" ? "low" : ""}`}>
-          <div style={{ width: `${Math.max(0, Math.min(100, meter))}%` }} />
-        </div>
-      ) : null}
-      {sub ? <div className="sub num">{sub}</div> : null}
-    </div>
-  );
-}
+import { Card, SectionHead, Tile as Stat, TileGrid, type Tone } from "./ui";
 
 const STAGE: Record<SystemInfo["ble"]["recovery_stage"], { text: string; tone: Tone }> = {
   ok: { text: "Healthy", tone: "ok" },
@@ -63,7 +31,8 @@ function powerStatus(p: SystemInfo["host"]["power"]): { text: string; tone: Tone
   return { text: "OK", tone: "ok", sub: "No under-voltage since boot" };
 }
 
-export function SystemPanel({ sys }: { sys: SystemInfo | null }) {
+export function SystemPanel() {
+  const sys = useSystem().data;
   const h = sys?.host;
   const b = sys?.ble;
   const temp = h?.cpu_temp_c ?? null;
@@ -79,19 +48,18 @@ export function SystemPanel({ sys }: { sys: SystemInfo | null }) {
   const wifi = h?.wifi;
 
   return (
-    <section className="card">
-      <div className="section-head">
-        <h2>Raspberry Pi &amp; link</h2>
-        <span className="meta">
+    <Card>
+      <SectionHead title="Raspberry Pi & link">
+        <span className="text-xs text-muted">
           {h ? [h.model ?? h.hostname, h.uptime_s !== null ? `up ${fmtDuration(h.uptime_s)}` : null].filter(Boolean).join(" · ") : "Loading…"}
         </span>
-      </div>
-      <div className="tiles">
+      </SectionHead>
+      <TileGrid label="Raspberry Pi and link health">
         <Stat
           label="BMS signal"
           value={
-            <span className="signal-value">
-              <SignalBars rssi={rssi} />
+            <span className="inline-flex items-center gap-2">
+              <SignalBars rssi={rssi} size="lg" />
               {rssi ?? "–"}
             </span>
           }
@@ -153,7 +121,7 @@ export function SystemPanel({ sys }: { sys: SystemInfo | null }) {
           unit="dBm"
           sub={wifi ? `${wifi.interface} · quality ${fmt(wifi.link_quality, 0)}/70` : "Not on WiFi"}
         />
-      </div>
-    </section>
+      </TileGrid>
+    </Card>
   );
 }

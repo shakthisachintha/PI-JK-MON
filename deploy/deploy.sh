@@ -3,9 +3,14 @@
 #
 #   ./deploy/deploy.sh                    on the Pi: build and install in place
 #   ./deploy/deploy.sh user@host          from another computer: build, copy to ~/jkbms-pi on the Pi, install there
+#   add --full to either form to force apt update and a full Python dependency install
 set -euo pipefail
 
-TARGET="${1:-}"
+TARGET=""
+INSTALL_ARGS=()
+for arg in "$@"; do
+  if [[ "$arg" == "--full" ]]; then INSTALL_ARGS+=(--full); else TARGET="$arg"; fi
+done
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "==> building dashboard"
@@ -14,9 +19,9 @@ echo "==> building dashboard"
 if [[ -z "$TARGET" ]]; then
   echo "==> installing locally from $ROOT"
   if [[ $EUID -eq 0 ]]; then
-    "$ROOT/deploy/install.sh"
+    "$ROOT/deploy/install.sh" ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}
   else
-    sudo "$ROOT/deploy/install.sh"
+    sudo "$ROOT/deploy/install.sh" ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}
   fi
   exit 0
 fi
@@ -28,4 +33,4 @@ rsync -az --delete \
   "$ROOT/" "$TARGET:jkbms-pi/"
 
 echo "==> installing"
-ssh -t "$TARGET" "cd jkbms-pi && sudo ./deploy/install.sh"
+ssh -t "$TARGET" "cd jkbms-pi && sudo ./deploy/install.sh ${INSTALL_ARGS[*]-}"

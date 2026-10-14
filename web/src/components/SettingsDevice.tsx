@@ -1,7 +1,7 @@
 "use client";
 
-import type { DeviceResponse, SettingsResponse } from "@/lib/api";
 import { fmtTime, humanize } from "@/lib/format";
+import { useDevice, useSettings } from "@/lib/queries";
 
 // Units for settings fields (spec §5.5).
 const SETTING_UNITS: Record<string, string> = {
@@ -34,29 +34,42 @@ const SETTING_UNITS: Record<string, string> = {
 
 const SWITCHES = new Set(["charge_switch", "discharge_switch", "balancer_switch"]);
 
+function Collapsible({ title, ts, children }: { title: string; ts?: number | null; children: React.ReactNode }) {
+  return (
+    <details className="group rounded-xl border border-border bg-surface p-4">
+      <summary className="flex cursor-pointer list-none items-center gap-3 group-open:mb-3 [&::-webkit-details-marker]:hidden">
+        <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">{title}</h2>
+        {ts ? <span className="ml-auto text-xs text-muted">read {fmtTime(ts)}</span> : <span className="ml-auto" />}
+        <span aria-hidden className="text-muted transition-transform group-open:rotate-90">
+          ▸
+        </span>
+      </summary>
+      {children}
+    </details>
+  );
+}
+
 function KV({ rows }: { rows: [string, React.ReactNode][] }) {
   return (
-    <dl className="kv num">
+    <dl className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-x-6 tabular-nums">
       {rows.map(([k, v]) => (
-        <div key={k}>
-          <dt>{k}</dt>
-          <dd>{v}</dd>
+        <div key={k} className="flex justify-between gap-3 border-b border-border py-1.5">
+          <dt className="text-muted">{k}</dt>
+          <dd className="text-right font-medium">{v}</dd>
         </div>
       ))}
     </dl>
   );
 }
 
-export function SettingsDevice({ settings, device }: { settings: SettingsResponse | null; device: DeviceResponse | null }) {
+export function SettingsDevice() {
+  const settings = useSettings().data;
+  const device = useDevice().data;
   const s = settings?.settings;
   const d = device?.device;
   return (
     <>
-      <details className="card">
-        <summary>
-          <h2>BMS settings</h2>
-          {settings?.ts ? <span className="meta">read {fmtTime(settings.ts)}</span> : null}
-        </summary>
+      <Collapsible title="BMS settings" ts={settings?.ts}>
         {s ? (
           <KV
             rows={Object.entries(s).map(([k, v]) => [
@@ -65,20 +78,16 @@ export function SettingsDevice({ settings, device }: { settings: SettingsRespons
             ])}
           />
         ) : (
-          <p className="meta">No settings received yet</p>
+          <p className="text-xs text-muted">No settings received yet</p>
         )}
-      </details>
-      <details className="card">
-        <summary>
-          <h2>Device</h2>
-          {device?.ts ? <span className="meta">read {fmtTime(device.ts)}</span> : null}
-        </summary>
+      </Collapsible>
+      <Collapsible title="Device" ts={device?.ts}>
         {d ? (
           <KV rows={Object.entries(d).map(([k, v]) => [humanize(k), String(v)])} />
         ) : (
-          <p className="meta">No device info received yet</p>
+          <p className="text-xs text-muted">No device info received yet</p>
         )}
-      </details>
+      </Collapsible>
     </>
   );
 }

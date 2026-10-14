@@ -7,6 +7,10 @@ import "@/lib/chartSetup";
 import { fmt } from "@/lib/format";
 import { useChartColors } from "@/lib/hooks";
 
+import { Card, Empty, SectionHead } from "./ui";
+
+const CHART = "relative h-56 sm:h-64";
+
 export function CellChart({ c }: { c: Current | null }) {
   const colors = useChartColors();
   const volts = c?.cell_voltages ?? [];
@@ -19,14 +23,12 @@ export function CellChart({ c }: { c: Current | null }) {
 
   if (!cells.length) {
     return (
-      <section className="card">
-        <div className="section-head">
-          <h2>Cell voltages</h2>
+      <Card>
+        <SectionHead title="Cell voltages" />
+        <div className={CHART}>
+          <Empty>No cell data yet</Empty>
         </div>
-        <div className="chart">
-          <div className="empty">No cell data yet</div>
-        </div>
-      </section>
+      </Card>
     );
   }
 
@@ -42,22 +44,21 @@ export function CellChart({ c }: { c: Current | null }) {
   );
 
   return (
-    <section className="card">
-      <div className="section-head">
-        <h2>Cell voltages</h2>
-        <div className="cell-stats num">
-          <span className="low">
-            Low <b>{fmt(min, 3)} V</b> (#{lowIdx})
-          </span>
-          <span className="high">
-            High <b>{fmt(max, 3)} V</b> (#{highIdx})
+    <Card>
+      <SectionHead title="Cell voltages">
+        <div className="flex flex-wrap gap-4 text-muted tabular-nums">
+          <span>
+            Low <b className="font-semibold text-cell-low">{fmt(min, 3)} V</b> (#{lowIdx})
           </span>
           <span>
-            Δ <b>{deltaMv.toFixed(0)} mV</b>
+            High <b className="font-semibold text-cell-high">{fmt(max, 3)} V</b> (#{highIdx})
+          </span>
+          <span>
+            Δ <b className="font-semibold text-fg">{deltaMv.toFixed(0)} mV</b>
           </span>
         </div>
-      </div>
-      <div className="chart">
+      </SectionHead>
+      <div className={CHART}>
         <Bar
           data={{
             labels: cells.map((x) => String(x.n)),
@@ -105,6 +106,6 @@ export function CellChart({ c }: { c: Current | null }) {
           }}
         />
       </div>
-    </section>
+    </Card>
   );
 }

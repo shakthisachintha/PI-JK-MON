@@ -1,8 +1,9 @@
 """Bluetooth adapter administration on Linux/BlueZ: power-cycle the adapter, read a live connection's RSSI.
 
 Both are best effort. Power-cycling goes through BlueZ's D-Bus API (allowed for the `bluetooth` group),
-falling back to `btmgmt`. Live RSSI needs `btmgmt`, which needs CAP_NET_ADMIN (granted by the systemd
-unit); without it, callers fall back to the RSSI seen in the last scan.
+falling back to `btmgmt`. Live RSSI uses a raw HCI Read RSSI command (hci_rssi.py, needs CAP_NET_RAW),
+falling back to `btmgmt conn-info` (needs CAP_NET_ADMIN); both are granted by the systemd unit. If neither
+works, callers fall back to the RSSI seen in the last scan.
 """
 
 from __future__ import annotations
@@ -91,6 +92,15 @@ async def connection_rssi(adapter: str, mac: str) -> int | None:
     global _rssi_disabled, _rssi_failures
     if _rssi_disabled:
         return None
+    from .hci_rssi import HciError, read_rssi
+
+    try:
+        rssi = await asyncio.to_thread(read_rssi, mac, adapter)
+        _rssi_failures = 0
+        return rssi
+    except HciError as e:
+        hci_error = str(e)
+
     idx = adapter_index(adapter)
     last = ""
     for addr_type in ("1", "2"):  # LE public, LE random
@@ -107,6 +117,8 @@ async def connection_rssi(adapter: str, mac: str) -> int | None:
         last = out.strip()
     _rssi_failures += 1
     if _rssi_failures >= RSSI_MAX_FAILURES:
-        log.info("live RSSI unavailable (%s); using scan RSSI instead", last[:200] or "no output")
+        log.info(
+            "live RSSI unavailable (HCI: %s; btmgmt: %s); using scan RSSI instead", hci_error, last[:200] or "no output"
+        )
         _rssi_disabled = True
     return None

@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-
 import { CellChart } from "@/components/CellChart";
 import { EventsTable } from "@/components/EventsTable";
 import { History } from "@/components/History";
@@ -9,68 +7,35 @@ import { LiveTiles } from "@/components/LiveTiles";
 import { SettingsDevice } from "@/components/SettingsDevice";
 import { StatusBar } from "@/components/StatusBar";
 import { SystemPanel } from "@/components/SystemPanel";
-import { api, type BmsEvent, type Current, type DeviceResponse, type SettingsResponse, type SystemInfo } from "@/lib/api";
-import { usePolling } from "@/lib/hooks";
+import { Banner } from "@/components/ui";
+import { useCurrent, useDevice } from "@/lib/queries";
 
 export default function Dashboard() {
-  const [current, setCurrent] = useState<Current | null>(null);
-  const [offline, setOffline] = useState(false);
-  const [events, setEvents] = useState<BmsEvent[] | null>(null);
-  const [settings, setSettings] = useState<SettingsResponse | null>(null);
-  const [device, setDevice] = useState<DeviceResponse | null>(null);
-  const [system, setSystem] = useState<SystemInfo | null>(null);
-
-  // Live values every 3 s (spec §9.2).
-  usePolling(async () => {
-    try {
-      setCurrent(await api.current());
-      setOffline(false);
-    } catch {
-      setOffline(true);
-    }
-  }, 3000);
-
-  usePolling(async () => {
-    try {
-      setSystem(await api.system());
-    } catch {}
-  }, 10_000);
-
-  usePolling(async () => {
-    try {
-      setEvents((await api.events(20)).events);
-    } catch {}
-  }, 15_000);
-
-  usePolling(async () => {
-    try {
-      const [s, d] = await Promise.all([api.settings(), api.device()]);
-      setSettings(s);
-      setDevice(d);
-    } catch {}
-  }, 60_000);
-
-  const deviceName = device?.device?.device_name;
+  const current = useCurrent();
+  const device = useDevice();
+  const offline = current.isError;
+  const c = offline ? null : (current.data ?? null);
+  const deviceName = device.data?.device?.device_name;
 
   return (
     <>
-      <StatusBar current={offline ? null : current} deviceName={typeof deviceName === "string" ? deviceName : undefined} />
-      <main>
+      <StatusBar current={c} deviceName={typeof deviceName === "string" ? deviceName : undefined} />
+      <main className="mx-auto flex max-w-300 flex-col gap-4 px-4 pt-4 pb-12">
         {offline ? (
-          <div className="banner error">Cannot reach the monitor service. Retrying…</div>
-        ) : current?.stale ? (
-          <div className="banner stale">
-            {current.ts
+          <Banner tone="bad">Cannot reach the monitor service. Retrying…</Banner>
+        ) : c?.stale ? (
+          <Banner tone="warn">
+            {c.ts
               ? "Data is stale: no fresh readings from the BMS. Values below are the last ones received."
               : "Waiting for the first reading from the BMS…"}
-          </div>
+          </Banner>
         ) : null}
-        <LiveTiles c={current} />
-        <CellChart c={current} />
+        <LiveTiles c={c} />
+        <CellChart c={c} />
         <History />
-        <SystemPanel sys={system} />
-        <EventsTable events={events} />
-        <SettingsDevice settings={settings} device={device} />
+        <SystemPanel />
+        <EventsTable />
+        <SettingsDevice />
       </main>
     </>
   );

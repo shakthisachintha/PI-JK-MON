@@ -1,41 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-
-/** Calls `fn` now and every `intervalMs`; pauses while the tab is hidden (spec §9.2). */
-export function usePolling(fn: () => void | Promise<void>, intervalMs: number | null, deps: unknown[] = []) {
-  const fnRef = useRef(fn);
-  fnRef.current = fn;
-
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let cancelled = false;
-
-    const tick = async () => {
-      if (cancelled) return;
-      try {
-        await fnRef.current();
-      } finally {
-        if (!cancelled && intervalMs !== null && document.visibilityState === "visible") {
-          timer = setTimeout(tick, intervalMs);
-        }
-      }
-    };
-    const onVisibility = () => {
-      clearTimeout(timer);
-      if (document.visibilityState === "visible") tick();
-    };
-
-    tick();
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [intervalMs, ...deps]);
-}
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 /** Re-renders every `ms` so relative times ("3 s ago") stay current. */
 export function useNow(ms = 1000): number {

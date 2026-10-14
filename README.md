@@ -50,6 +50,10 @@ service itself never needs Bun or Node.js. Build wherever you have them:
 ./deploy/deploy.sh user@raspberrypi.local   # from another computer: build, copy to ~/jkbms-pi on the Pi, install there
 ```
 
+Re-runs are quick: apt is skipped when the packages are present, and Python dependencies are only resolved
+again when `pyproject.toml` changes (otherwise only this package is reinstalled, offline). Add `--full` to force
+everything, e.g. after an OS upgrade.
+
 Either way this builds `web/` and runs `deploy/install.sh` as root, which
 installs `python3-venv bluez`, creates the `jkbms` user (in the `bluetooth` group), a venv in `/opt/jkbms-pi`,
 copies `config.example.toml` to `/etc/jkbms-pi/config.toml` if missing, and enables the `jkbms-pi` service.
