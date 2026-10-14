@@ -7,7 +7,7 @@ TARGET="${1:?usage: $0 user@host}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "==> building dashboard"
-(cd "$ROOT/web" && npm ci --silent && npm run build)
+(cd "$ROOT/web" && bun install --frozen-lockfile && bun run build)
 
 echo "==> copying to $TARGET:~/jkbms-pi"
 rsync -az --delete \

@@ -14,7 +14,7 @@ CONF_DIR=/etc/jkbms-pi
 
 if [[ ! -f "$SRC/jkbms_pi/static/index.html" ]]; then
   echo "warning: dashboard not built (jkbms_pi/static/index.html missing)." >&2
-  echo "         build it on a computer with Node.js: cd web && npm ci && npm run build" >&2
+  echo "         build it on a computer with Bun: cd web && bun install && bun run build" >&2
   echo "         (deploy/deploy.sh does this for you). The API will still work." >&2
 fi
 

@@ -184,7 +184,7 @@ def create_app(cfg: Config, state: State, store: Store, static_dir: Path | None 
         def no_dashboard():
             return HTMLResponse(
                 "<h1>JK BMS Monitor</h1><p>The dashboard has not been built. "
-                "Run <code>npm run build</code> in <code>web/</code>. The API is at <a href='/docs'>/docs</a>.</p>"
+                "Run <code>bun run build</code> in <code>web/</code>. The API is at <a href='/docs'>/docs</a>.</p>"
             )
 
     return app

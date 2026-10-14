@@ -32,17 +32,17 @@ uv venv && uv pip install -e ".[dev]"        # or: python -m venv .venv && .venv
 .venv/bin/python -m jkbms_pi --fake --seed-days 30   # prefill 30 days of synthetic history first
 
 # dashboard, with hot reload on http://localhost:3000 (talks to the API on :8080)
-cd web && npm install && npm run dev
+cd web && bun install && bun run dev
 
 # production build → copies the static export into jkbms_pi/static, served at http://localhost:8080/
-cd web && npm run build
+cd web && bun run build
 ```
 
 `--fake` uses `./jkbms-fake.db` unless `db_path` is set explicitly.
 
 ## Deploy to the Pi
 
-The Pi never runs Node.js. The dashboard is built on your computer and shipped as static files.
+The Pi never runs Bun or Node.js. The dashboard is built on your computer and shipped as static files.
 
 ```bash
 ./deploy/deploy.sh pi@raspberrypi.local
