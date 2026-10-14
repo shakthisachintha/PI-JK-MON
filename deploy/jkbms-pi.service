@@ -1,0 +1,16 @@
+[Unit]
+Description=JK BMS monitor
+After=bluetooth.target network-online.target
+Wants=bluetooth.target network-online.target
+
+[Service]
+User=jkbms
+Group=jkbms
+SupplementaryGroups=bluetooth
+ExecStart=/opt/jkbms-pi/venv/bin/python -m jkbms_pi --config /etc/jkbms-pi/config.toml
+Restart=always
+RestartSec=5
+StateDirectory=jkbms-pi
+
+[Install]
+WantedBy=multi-user.target

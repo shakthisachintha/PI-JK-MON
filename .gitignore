@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Local data
+*.db
+*.db-wal
+*.db-shm
+frames/
+
+# Dashboard build output (built from web/)
+jkbms_pi/static/
+
+# Web
+web/node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+web/*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

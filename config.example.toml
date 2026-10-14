@@ -1,0 +1,31 @@
+# JK BMS monitor configuration. Copy to /etc/jkbms-pi/config.toml.
+# Every key can be overridden with an environment variable: JKBMS_<KEY>, e.g. JKBMS_BMS_MAC.
+
+# BLE MAC address of the BMS (any letter case). Required unless running with --fake.
+bms_mac = "c8:47:80:71:44:d4"
+
+# BlueZ adapter
+adapter = "hci0"
+
+# SQLite database file
+db_path = "/var/lib/jkbms-pi/jkbms.db"
+
+# HTTP server (0.0.0.0 = reachable from the LAN)
+http_host = "0.0.0.0"
+http_port = 8080
+
+# Store one reading every N seconds while data is fresh
+sample_interval_s = 3
+
+# Readings older than this are not stored, and are flagged stale in the API
+stale_s = 10
+
+# Keep raw samples this many days; per-minute rollups are kept forever
+raw_retention_days = 30
+
+# Link supervision: re-request cell info after N s without cell data;
+# disconnect after N s without any notification
+cell_rerequest_s = 5
+link_timeout_s = 20
+
+log_level = "INFO"
