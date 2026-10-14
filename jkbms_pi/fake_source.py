@@ -10,7 +10,7 @@ import time
 
 from . import protocol as p
 from .source import OnEvent, OnFrame, OnLinkChange
-from .state import LINK_CONNECTED, LINK_CONNECTING, LINK_SCANNING
+from .state import LINK_CONNECTED, LINK_CONNECTING, LINK_SCANNING, BleStats, now_ms
 
 CELLS = 16
 NOMINAL_AH = 280.0
@@ -120,9 +120,10 @@ def synth_cells(t: float, soc: float, cycles: int, rng: random.Random) -> p.Cell
 class FakeSource:
     """Same interface as BleSource. Emits a cell-data frame every `frame_interval_s`."""
 
-    def __init__(self, frame_interval_s: float = 1.0, seed: int | None = None) -> None:
+    def __init__(self, frame_interval_s: float = 1.0, seed: int | None = None, stats: BleStats | None = None) -> None:
         self.frame_interval_s = frame_interval_s
         self.rng = random.Random(seed)
+        self.stats = stats or BleStats()
         self.soc = 70.0
         self.cycles = 41
 
@@ -143,6 +144,10 @@ class FakeSource:
             self.soc = max(5.0, min(100.0, self.soc + cells.current * (t - last) / 3600 / NOMINAL_AH * 100))
             last = t
             on_frame(p.encode_cells(cells))
+            if self.stats.rssi_ts is None or now_ms() - self.stats.rssi_ts > 30_000:
+                self.stats.rssi = round(-68 + 6 * math.sin(t / 600) + self.rng.gauss(0, 2))
+                self.stats.rssi_ts = now_ms()
+                self.stats.rssi_source = "connection"
 
 
 def seed_rows(start_ms: int, end_ms: int, interval_s: float, seed: int = 1) -> list[tuple]:

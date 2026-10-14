@@ -23,9 +23,20 @@ stale_s = 10
 # Keep raw samples this many days; per-minute rollups are kept forever
 raw_retention_days = 30
 
-# Link supervision: re-request cell info after N s without cell data;
-# disconnect after N s without any notification
+# Link supervision and recovery, all driven by "time since the last cell-data frame":
+#   re-request cell info every cell_rerequest_s
+#   disconnect and reconnect after link_timeout_s
+#   power-cycle the Bluetooth adapter after adapter_reset_after_s, then again with doubling backoff
+#     (capped at adapter_reset_max_interval_s)
+#   after restart_after_resets resets that didn't help, exit; systemd restarts bluetoothd and this service
+#     (0 = never give up, keep resetting the adapter)
 cell_rerequest_s = 5
 link_timeout_s = 20
+adapter_reset_after_s = 120
+adapter_reset_max_interval_s = 1800
+restart_after_resets = 3
+
+# How often to read the BMS signal strength (RSSI) while connected
+rssi_poll_s = 30
 
 log_level = "INFO"

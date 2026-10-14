@@ -136,8 +136,13 @@ class Service:
 
     async def run(self) -> None:
         await asyncio.to_thread(self.store.add_event, now_ms(), "service_start", None)
-        await asyncio.gather(
-            self.source.run(self.on_frame, self.on_link_change, self.on_event),
-            run_sampler(self.state, self.store, self.cfg.sample_interval_s, self.cfg.stale_s),
-            self.maintenance(),
-        )
+        try:
+            await asyncio.gather(
+                self.source.run(self.on_frame, self.on_link_change, self.on_event),
+                run_sampler(self.state, self.store, self.cfg.sample_interval_s, self.cfg.stale_s),
+                self.maintenance(),
+            )
+        finally:
+            # Let pending event/settings writes land (e.g. the service_restart event) before exiting.
+            if self._bg:
+                await asyncio.wait(set(self._bg), timeout=5)

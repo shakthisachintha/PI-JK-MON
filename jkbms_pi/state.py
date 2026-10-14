@@ -26,6 +26,18 @@ class Counters:
 
 
 @dataclass
+class BleStats:
+    """Link diagnostics written by the source, read by the API."""
+
+    rssi: int | None = None  # dBm
+    rssi_ts: int | None = None  # UTC epoch ms
+    rssi_source: str | None = None  # "connection" (live) or "scan" (last advertisement)
+    adapter_resets: int = 0
+    last_adapter_reset_ts: int | None = None
+    recovery_stage: str = "ok"  # ok | rerequesting | reconnecting | adapter_reset
+
+
+@dataclass
 class State:
     latest_cells: CellData | None = None
     latest_cells_ts: int | None = None  # UTC epoch ms when received
@@ -35,6 +47,7 @@ class State:
     device_info_ts: int | None = None
     link_status: str = LINK_SCANNING
     counters: Counters = field(default_factory=Counters)
+    ble: BleStats = field(default_factory=BleStats)
     started_ms: int = field(default_factory=now_ms)
 
     def cells_age_s(self, at_ms: int | None = None) -> float | None:

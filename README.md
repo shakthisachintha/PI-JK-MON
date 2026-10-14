@@ -78,6 +78,23 @@ sudo -u jkbms /opt/jkbms-pi/venv/bin/python -m jkbms_pi --config /etc/jkbms-pi/c
 Frames are logged as hex and saved to `/var/lib/jkbms-pi/frames/`. Copy a few into `tests/fixtures/`, add
 assertions that match the JK app, and adjust offsets in `protocol.py`.
 
+## Widgets
+
+**iPhone (Scriptable):** [widgets/scriptable-jkbms.js](widgets/scriptable-jkbms.js). Paste it into a new Scriptable
+script, add a Scriptable widget (small, medium or lock screen) and set its *Parameter* to your dashboard URL.
+On macOS Sonoma or later, the same widget can be placed on the Mac desktop through *Edit Widgets → iPhone*.
+
+**Mac menu bar (SwiftBar):** [widgets/swiftbar/jkbms.10s.sh](widgets/swiftbar/jkbms.10s.sh) shows SOC and power in the
+menu bar, with cells, temperatures and link status in the dropdown. It needs only `curl` and `jq` (built into macOS 15+).
+
+```bash
+brew install --cask swiftbar          # pick a plugin folder on first launch
+cp widgets/swiftbar/jkbms.10s.sh "<plugin folder>/"
+```
+
+Edit `JKBMS_URL` at the top of the copied file. The `10s` in the filename is the refresh interval.
+When the Pi is unreachable, both widgets show the last values they fetched, marked as offline.
+
 ## API
 
 | Endpoint | |
@@ -88,9 +105,28 @@ assertions that match the JK app, and adjust offsets in `protocol.py`.
 | `GET /api/history?from&to&fields&max_points` | Downsampled series; `from`/`to` in epoch ms or ISO-8601 |
 | `GET /api/history/cells?from&to&max_points` | Per-cell averages per bucket |
 | `GET /api/events?limit&from&to` | Newest first |
+| `GET /api/system` | Pi health (CPU temp, under-voltage/throttling, CPU, memory, storage, WiFi) and BLE link (RSSI, recovery state) |
 | `GET /api/export.csv?from&to` | Raw samples, max 31 days |
 
 Bad parameters return `400 {"error": "..."}`. Interactive docs: `/docs`.
+
+## Link recovery
+
+Everything is driven by the time since the last **cell-data frame**:
+
+| Stalled for | Action | Event |
+|---|---|---|
+| `cell_rerequest_s` (5 s) | Re-send cell-info request | `cell_info_rerequest` |
+| `link_timeout_s` (20 s) | Disconnect, rescan, reconnect | `ble_timeout`, `ble_disconnected` |
+| `adapter_reset_after_s` (2 min), then 4, 8, … min (cap 30) | Power-cycle the Bluetooth adapter | `adapter_reset` |
+| after `restart_after_resets` (3) resets | Exit with code 75; systemd restarts `bluetooth.service`, then this service | `service_restart` |
+
+Set `restart_after_resets = 0` to never exit. The dashboard's *Raspberry Pi & link* section shows the current
+stage, the number of resets, and the BMS signal strength. Live RSSI is read with `btmgmt` (the unit grants
+`CAP_NET_ADMIN`); if that isn't available, the RSSI seen at the last scan is shown instead.
+
+After pulling these changes onto an existing install, re-run `./deploy/deploy.sh` so the updated systemd unit
+(capabilities, `video` group, BlueZ restart hook) is installed.
 
 ## Notes and deviations from the spec
 
@@ -102,6 +138,8 @@ Bad parameters return `400 {"error": "..."}`. Interactive docs: `/docs`.
   `[from, to)`. When alignment would add one bucket over `max_points`, the bucket is widened by a second. Ranges over
   6 h use a minimum bucket of 60 s, since they read the 1-minute rollups.
 - `min_cell_index` / `max_cell_index` are **1-based**, matching the JK app's cell numbering.
+- Link liveness counts only cell-data frames, not "any notification" (§5.6). The BMS acknowledges every command
+  with a short notification, so re-requesting cell info used to keep a dead data stream looking alive forever.
 - `crc_error` events are rate-limited to one per minute (with a count), so a noisy link can't flood the table.
 - Retention never deletes raw samples that haven't been rolled up yet.
 - `/api/health` also returns frame counters (`frames_ok`, `crc_errors`, `reconnects`, `unknown_frames`).

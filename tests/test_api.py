@@ -143,3 +143,16 @@ def test_cors_open(env):
     *_, client = env
     r = client.get("/api/health", headers={"Origin": "http://example.lan"})
     assert r.headers["access-control-allow-origin"] == "*"
+
+
+def test_system_endpoint(env):
+    _, _, state, _, client = env
+    state.ble.rssi = -72
+    state.ble.rssi_ts = now_ms()
+    body = client.get("/api/system").json()
+    assert body["ble"]["rssi"] == -72 and body["ble"]["rssi_quality"] == "fair"
+    assert body["ble"]["recovery_stage"] == "ok"
+    host = body["host"]
+    assert {"hostname", "cpu_temp_c", "memory", "disk", "power", "wifi", "load"} <= set(host)
+    assert host["disk"]["total_gb"] > 0
+    assert client.get("/api/current").json()["rssi"] == -72

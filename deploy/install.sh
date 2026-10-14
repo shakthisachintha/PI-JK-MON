@@ -26,7 +26,7 @@ echo "==> creating service user"
 if ! id jkbms >/dev/null 2>&1; then
   useradd --system --home-dir /var/lib/jkbms-pi --no-create-home --shell /usr/sbin/nologin jkbms
 fi
-usermod -aG bluetooth jkbms
+usermod -aG bluetooth,video jkbms   # video: vcgencmd (Pi power/throttle flags)
 rfkill unblock bluetooth || true
 
 echo "==> creating venv in $PREFIX"

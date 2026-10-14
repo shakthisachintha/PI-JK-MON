@@ -17,6 +17,7 @@ from . import __version__
 from .config import Config
 from .state import State, now_ms, snapshot
 from .store import DAY_MS, HISTORY_FIELDS, QueryError, Store
+from .system import SystemMonitor
 
 STATIC_DIR = Path(__file__).parent / "static"
 DEFAULT_HISTORY_FIELDS = "voltage,current,power,soc"
@@ -55,8 +56,31 @@ def parse_range(frm: str | None, to: str | None, default_span_ms: int = DAY_MS) 
     return f, t
 
 
+def rssi_quality(rssi: int | None) -> str | None:
+    if rssi is None:
+        return None
+    return "excellent" if rssi >= -60 else "good" if rssi >= -70 else "fair" if rssi >= -80 else "poor"
+
+
 def create_app(cfg: Config, state: State, store: Store, static_dir: Path | None = STATIC_DIR) -> FastAPI:
     app = FastAPI(title="JK BMS Monitor", version=__version__)
+    monitor = SystemMonitor(cfg.db_path)
+
+    def ble_info() -> dict:
+        b = state.ble
+        at = now_ms()
+        return {
+            "link": state.link_status,
+            "rssi": b.rssi,
+            "rssi_quality": rssi_quality(b.rssi),
+            "rssi_source": b.rssi_source,
+            "rssi_age_s": None if b.rssi_ts is None else round((at - b.rssi_ts) / 1000, 1),
+            "recovery_stage": b.recovery_stage,
+            "adapter_resets": b.adapter_resets,
+            "last_adapter_reset_ts": b.last_adapter_reset_ts,
+            "counters": vars(state.counters),
+        }
+
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
 
     @app.exception_handler(QueryError)
@@ -81,7 +105,15 @@ def create_app(cfg: Config, state: State, store: Store, static_dir: Path | None 
             "service_uptime_s": int((now_ms() - state.started_ms) / 1000),
             "version": __version__,
             "counters": vars(state.counters),
+            "rssi": state.ble.rssi,
+            "recovery_stage": state.ble.recovery_stage,
+            "adapter_resets": state.ble.adapter_resets,
         }
+
+    @app.get("/api/system")
+    def system():
+        """Raspberry Pi health and BLE link diagnostics."""
+        return {"host": monitor.read(), "ble": ble_info()}
 
     @app.get("/api/current")
     def current():
@@ -92,6 +124,7 @@ def create_app(cfg: Config, state: State, store: Store, static_dir: Path | None 
             "age_s": None if age is None else round(age, 1),
             "stale": age is None or age > cfg.stale_s,
             "link": state.link_status,
+            "rssi": state.ble.rssi,
         }
         cells = state.latest_cells
         if cells is None:

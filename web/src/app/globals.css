@@ -555,3 +555,52 @@ details.card > summary .meta {
   margin-left: auto;
   margin-right: 12px;
 }
+
+/* --- signal bars & tones --- */
+
+.bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+  width: 17px;
+  flex: none;
+}
+.bars i {
+  display: block;
+  width: 3px;
+  border-radius: 1px;
+  background: var(--border);
+}
+.bars.good i.on {
+  background: var(--ok);
+}
+.bars.fair i.on {
+  background: var(--warn);
+}
+.bars.poor i.on {
+  background: var(--bad);
+}
+
+.signal-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.signal-value .bars {
+  height: 18px;
+  width: 24px;
+}
+.signal-value .bars i {
+  width: 4.5px;
+}
+
+.tone-ok {
+  color: var(--ok);
+}
+.tone-warn {
+  color: var(--warn);
+}
+.tone-bad {
+  color: var(--bad);
+}

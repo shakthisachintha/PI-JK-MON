@@ -4,6 +4,8 @@ import type { Current } from "@/lib/api";
 import { fmtAgo } from "@/lib/format";
 import { useNow } from "@/lib/hooks";
 
+import { SignalBars } from "./SignalBars";
+
 const LINK_LABEL: Record<string, string> = {
   connected: "Connected",
   connecting: "Connecting…",
@@ -27,6 +29,12 @@ export function StatusBar({ current, deviceName }: { current: Current | null; de
           <span className={`dot ${current ? link : ""}`} aria-hidden />
           {current ? LINK_LABEL[link] ?? link : "No connection to service"}
         </span>
+        {current?.rssi != null ? (
+          <span className="link num" title="BMS Bluetooth signal strength">
+            <SignalBars rssi={current.rssi} />
+            {current.rssi} dBm
+          </span>
+        ) : null}
         <span className="updated num">Updated {fmtAgo(age)}</span>
       </div>
     </header>

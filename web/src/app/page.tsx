@@ -8,7 +8,8 @@ import { History } from "@/components/History";
 import { LiveTiles } from "@/components/LiveTiles";
 import { SettingsDevice } from "@/components/SettingsDevice";
 import { StatusBar } from "@/components/StatusBar";
-import { api, type BmsEvent, type Current, type DeviceResponse, type SettingsResponse } from "@/lib/api";
+import { SystemPanel } from "@/components/SystemPanel";
+import { api, type BmsEvent, type Current, type DeviceResponse, type SettingsResponse, type SystemInfo } from "@/lib/api";
 import { usePolling } from "@/lib/hooks";
 
 export default function Dashboard() {
@@ -17,6 +18,7 @@ export default function Dashboard() {
   const [events, setEvents] = useState<BmsEvent[] | null>(null);
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [device, setDevice] = useState<DeviceResponse | null>(null);
+  const [system, setSystem] = useState<SystemInfo | null>(null);
 
   // Live values every 3 s (spec §9.2).
   usePolling(async () => {
@@ -27,6 +29,12 @@ export default function Dashboard() {
       setOffline(true);
     }
   }, 3000);
+
+  usePolling(async () => {
+    try {
+      setSystem(await api.system());
+    } catch {}
+  }, 10_000);
 
   usePolling(async () => {
     try {
@@ -60,6 +68,7 @@ export default function Dashboard() {
         <LiveTiles c={current} />
         <CellChart c={current} />
         <History />
+        <SystemPanel sys={system} />
         <EventsTable events={events} />
         <SettingsDevice settings={settings} device={device} />
       </main>

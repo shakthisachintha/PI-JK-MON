@@ -20,6 +20,7 @@ from .store import DAY_MS, Store
 log = logging.getLogger("jkbms_pi")
 
 FAKE_DB_PATH = "./jkbms-fake.db"
+EXIT_RECOVERY_EXHAUSTED = 75  # EX_TEMPFAIL; the systemd unit restarts bluetooth.service on this code
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -84,13 +85,23 @@ async def amain(args: argparse.Namespace) -> int:
     if args.fake:
         from .fake_source import FakeSource
 
-        source = FakeSource()
+        source = FakeSource(stats=state.ble)
         if args.seed_days:
             await asyncio.to_thread(seed_history, store, args.seed_days, cfg.sample_interval_s)
     else:
         from .ble_client import BleSource
 
-        source = BleSource(cfg.bms_mac, cfg.adapter, cfg.cell_rerequest_s, cfg.link_timeout_s)
+        source = BleSource(
+            cfg.bms_mac,
+            cfg.adapter,
+            cell_rerequest_s=cfg.cell_rerequest_s,
+            link_timeout_s=cfg.link_timeout_s,
+            adapter_reset_after_s=cfg.adapter_reset_after_s,
+            adapter_reset_max_interval_s=cfg.adapter_reset_max_interval_s,
+            restart_after_resets=cfg.restart_after_resets,
+            rssi_poll_s=cfg.rssi_poll_s,
+            stats=state.ble,
+        )
 
     dump_dir = None
     if args.dump_frames is not None:
@@ -110,7 +121,11 @@ async def amain(args: argparse.Namespace) -> int:
         done, _ = await asyncio.wait({service_task, server_task}, return_when=asyncio.FIRST_COMPLETED)
         for t in done:
             if t is service_task and t.exception():
-                log.error("service stopped", exc_info=t.exception())
+                exc = t.exception()
+                if type(exc).__name__ == "LinkRecoveryExhausted":
+                    log.error("BLE recovery exhausted; exiting so systemd restarts bluetoothd and this service")
+                    return EXIT_RECOVERY_EXHAUSTED
+                log.error("service stopped", exc_info=exc)
                 return 1
         return 0
     finally:

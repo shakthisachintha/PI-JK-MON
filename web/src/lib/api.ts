@@ -9,6 +9,7 @@ export interface Current {
   age_s: number | null;
   stale: boolean;
   link: LinkStatus;
+  rssi: number | null; // BMS signal strength, dBm
   voltage: number | null;
   current: number | null;
   power: number | null;
@@ -85,6 +86,48 @@ export interface DeviceResponse {
   device: Record<string, string | number> | null;
 }
 
+export interface PowerFlags {
+  raw: string | null;
+  under_voltage_now?: boolean;
+  under_voltage_occurred?: boolean;
+  freq_capped_now?: boolean;
+  freq_capped_occurred?: boolean;
+  throttled_now?: boolean;
+  throttled_occurred?: boolean;
+  soft_temp_limit_now?: boolean;
+  soft_temp_limit_occurred?: boolean;
+}
+
+export interface SystemInfo {
+  host: {
+    hostname: string;
+    model: string | null;
+    uptime_s: number | null;
+    cpu_temp_c: number | null;
+    cpu_percent: number | null;
+    cpu_count: number | null;
+    load: number[] | null;
+    memory: { total_mb: number; used_mb: number; available_mb: number; percent: number; swap_used_mb: number } | null;
+    disk: { total_gb: number; free_gb: number; percent: number } | null;
+    db_size_mb: number | null;
+    power: PowerFlags | null;
+    core_volts: number | null;
+    wifi: { interface: string; link_quality: number; signal_dbm: number } | null;
+    process_rss_mb: number | null;
+  };
+  ble: {
+    link: LinkStatus;
+    rssi: number | null;
+    rssi_quality: "excellent" | "good" | "fair" | "poor" | null;
+    rssi_source: "connection" | "scan" | null;
+    rssi_age_s: number | null;
+    recovery_stage: "ok" | "rerequesting" | "reconnecting" | "adapter_reset";
+    adapter_resets: number;
+    last_adapter_reset_ts: number | null;
+    counters: { frames_ok: number; crc_errors: number; reconnects: number; unknown_frames: number };
+  };
+}
+
 export class ApiError extends Error {}
 
 async function get<T>(path: string, params?: Record<string, string | number>): Promise<T> {
@@ -108,6 +151,7 @@ export const api = {
   current: () => get<Current>("/api/current"),
   settings: () => get<SettingsResponse>("/api/settings"),
   device: () => get<DeviceResponse>("/api/device"),
+  system: () => get<SystemInfo>("/api/system"),
   events: (limit = 20) => get<{ events: BmsEvent[] }>("/api/events", { limit }),
   history: (from: number, to: number, maxPoints = 600) =>
     get<History>("/api/history", { from, to, fields: HISTORY_FIELDS, max_points: maxPoints }),

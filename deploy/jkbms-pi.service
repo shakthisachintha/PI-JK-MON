@@ -6,8 +6,12 @@ Wants=bluetooth.target network-online.target
 [Service]
 User=jkbms
 Group=jkbms
-SupplementaryGroups=bluetooth
+SupplementaryGroups=bluetooth video
+# CAP_NET_ADMIN lets btmgmt read the live connection RSSI and power-cycle the adapter.
+AmbientCapabilities=CAP_NET_ADMIN
 ExecStart=/opt/jkbms-pi/venv/bin/python -m jkbms_pi --config /etc/jkbms-pi/config.toml
+# Exit code 75 = BLE recovery exhausted: restart BlueZ itself (as root, "+") before we come back up.
+ExecStopPost=+/bin/sh -c 'if [ "$EXIT_STATUS" = "75" ]; then systemctl restart bluetooth.service; fi'
 Restart=always
 RestartSec=5
 StateDirectory=jkbms-pi
