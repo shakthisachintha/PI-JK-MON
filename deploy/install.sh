@@ -32,8 +32,8 @@ rfkill unblock bluetooth || true
 echo "==> creating venv in $PREFIX"
 mkdir -p "$PREFIX"
 [[ -d "$PREFIX/venv" ]] || python3 -m venv "$PREFIX/venv"
-"$PREFIX/venv/bin/pip" install --quiet --upgrade pip
-"$PREFIX/venv/bin/pip" install --quiet "$SRC"
+"$PREFIX/venv/bin/pip" install --upgrade pip
+"$PREFIX/venv/bin/pip" install "$SRC"
 
 echo "==> config"
 mkdir -p "$CONF_DIR"

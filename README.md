@@ -20,7 +20,7 @@ JK BMS ──BLE──▶ Python service (asyncio: BLE · sampler · rollup/rete
 | `jkbms_pi/state.py`, `sampler.py`, `store.py`, `api.py`, `config.py` | As in spec §11 |
 | `jkbms_pi/static/` | Built dashboard (generated, git-ignored) |
 | `web/` | Next.js dashboard source (TypeScript, Chart.js) |
-| `deploy/` | systemd unit, `install.sh` (on the Pi), `deploy.sh` (from your computer) |
+| `deploy/` | systemd unit, `install.sh` (installer), `deploy.sh` (build + install, locally or over SSH) |
 
 ## Develop on a laptop (no Bluetooth needed)
 
@@ -42,13 +42,15 @@ cd web && bun run build
 
 ## Deploy to the Pi
 
-The Pi never runs Bun or Node.js. The dashboard is built on your computer and shipped as static files.
+The dashboard is built with Bun (which also needs Node.js for `next build`) and served as static files, so the
+service itself never needs Bun or Node.js. Build wherever you have them:
 
 ```bash
-./deploy/deploy.sh pi@raspberrypi.local
+./deploy/deploy.sh                       # on the Pi: build and install in place
+./deploy/deploy.sh user@raspberrypi.local   # from another computer: build, copy to ~/jkbms-pi on the Pi, install there
 ```
 
-This builds `web/`, rsyncs the project to `~/jkbms-pi` on the Pi and runs `sudo ./deploy/install.sh`, which
+Either way this builds `web/` and runs `deploy/install.sh` as root, which
 installs `python3-venv bluez`, creates the `jkbms` user (in the `bluetooth` group), a venv in `/opt/jkbms-pi`,
 copies `config.example.toml` to `/etc/jkbms-pi/config.toml` if missing, and enables the `jkbms-pi` service.
 
