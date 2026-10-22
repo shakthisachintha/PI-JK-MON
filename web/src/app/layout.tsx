@@ -1,11 +1,13 @@
 import type { Metadata, Viewport } from "next";
 
+import { AppHeader } from "@/components/AppHeader";
+
 import "./globals.css";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
-  title: "JK BMS Monitor",
-  description: "Live and historical data from a JK BMS",
+  title: "Ray Vault",
+  description: "Battery (JK BMS) and inverter (SRNE) monitoring and control",
 };
 
 export const viewport: Viewport = {
@@ -21,7 +23,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <Providers>{children}</Providers>
+        <Providers>
+          <AppHeader />
+          {children}
+        </Providers>
       </body>
     </html>
   );

@@ -5,7 +5,7 @@ transmit-power read on LE links, so the whole request fails with "Invalid Parame
 HCI_Read_RSSI avoids that. Needs CAP_NET_RAW (granted by the systemd unit) or root.
 
 Test on the Pi while the service is connected:
-    sudo /opt/jkbms-pi/venv/bin/python -m jkbms_pi.hci_rssi c8:47:80:71:44:d4 [hci0]
+    sudo /opt/ray-vault/venv/bin/python -m ray_vault.bms.hci_rssi c8:47:80:71:44:d4 [hci0]
 """
 
 from __future__ import annotations
@@ -104,7 +104,7 @@ def read_rssi(mac: str, adapter: str = "hci0", timeout: float = 2.0) -> int:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        sys.exit("usage: python -m jkbms_pi.hci_rssi <mac> [hci0]")
+        sys.exit("usage: python -m ray_vault.bms.hci_rssi <mac> [hci0]")
     try:
         print(f"RSSI {read_rssi(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else 'hci0')} dBm")
     except HciError as e:

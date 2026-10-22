@@ -2,7 +2,7 @@
 # Build the dashboard and install the service.
 #
 #   ./deploy/deploy.sh                    on the Pi: build and install in place
-#   ./deploy/deploy.sh user@host          from another computer: build, copy to ~/jkbms-pi on the Pi, install there
+#   ./deploy/deploy.sh user@host          from another computer: build, copy to ~/ray-vault on the Pi, install there
 #   add --full to either form to force apt update and a full Python dependency install
 set -euo pipefail
 
@@ -26,11 +26,11 @@ if [[ -z "$TARGET" ]]; then
   exit 0
 fi
 
-echo "==> copying to $TARGET:~/jkbms-pi"
+echo "==> copying to $TARGET:~/ray-vault"
 rsync -az --delete \
   --exclude .git --exclude .venv --exclude web/node_modules --exclude web/.next --exclude web/out \
   --exclude '*.db' --exclude '*.db-*' --exclude frames \
-  "$ROOT/" "$TARGET:jkbms-pi/"
+  "$ROOT/" "$TARGET:ray-vault/"
 
 echo "==> installing"
-ssh -t "$TARGET" "cd jkbms-pi && sudo ./deploy/install.sh ${INSTALL_ARGS[*]-}"
+ssh -t "$TARGET" "cd ray-vault && sudo ./deploy/install.sh ${INSTALL_ARGS[*]-}"

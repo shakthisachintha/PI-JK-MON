@@ -1,8 +1,8 @@
 "use client";
 
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api } from "./api";
+import { api, type EventSource } from "./api";
 import { isLive, windowFor, type RangeSel } from "./range";
 
 // Poll intervals. React Query pauses them while the tab is hidden (see providers.tsx).
@@ -14,7 +14,12 @@ const SLOW_MS = 60_000;
 export const queryKeys = {
   current: ["current"] as const,
   system: ["system"] as const,
-  events: (limit: number) => ["events", limit] as const,
+  events: (limit: number, source?: EventSource) => ["events", limit, source ?? "all"] as const,
+  overview: ["overview"] as const,
+  inverterCurrent: ["inverter", "current"] as const,
+  inverterSettings: ["inverter", "settings"] as const,
+  inverterDevice: ["inverter", "device"] as const,
+  inverterHistory: (sel: RangeSel) => ["inverter", "history", sel.key, sel.from ?? null, sel.to ?? null] as const,
   settings: ["settings"] as const,
   device: ["device"] as const,
   history: (sel: RangeSel) => ["history", sel.key, sel.from ?? null, sel.to ?? null] as const,
@@ -29,13 +34,60 @@ export function useSystem() {
   return useQuery({ queryKey: queryKeys.system, queryFn: api.system, refetchInterval: SYSTEM_MS });
 }
 
-export function useEvents(limit = 20) {
+export function useEvents(limit = 20, source?: EventSource) {
   return useQuery({
-    queryKey: queryKeys.events(limit),
-    queryFn: async () => (await api.events(limit)).events,
+    queryKey: queryKeys.events(limit, source),
+    queryFn: async () => (await api.events(limit, source)).events,
     refetchInterval: EVENTS_MS,
   });
 }
+
+export function useOverview() {
+  return useQuery({ queryKey: queryKeys.overview, queryFn: api.overview, refetchInterval: LIVE_MS, retry: false });
+}
+
+export function useInverterCurrent() {
+  return useQuery({ queryKey: queryKeys.inverterCurrent, queryFn: api.inverterCurrent, refetchInterval: LIVE_MS });
+}
+
+export function useInverterSettings() {
+  return useQuery({ queryKey: queryKeys.inverterSettings, queryFn: api.inverterSettings, refetchInterval: 15_000 });
+}
+
+export function useInverterDevice() {
+  return useQuery({ queryKey: queryKeys.inverterDevice, queryFn: api.inverterDevice, refetchInterval: SLOW_MS });
+}
+
+/** Write one inverter setting; on success refresh the settings and the event log. */
+export function useSetInverterSetting() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { key: string; value: number; pin: string; confirm?: boolean }) =>
+      api.setInverterSetting(v.key, v.value, v.pin, v.confirm),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.inverterSettings });
+      qc.invalidateQueries({ queryKey: ["events"] });
+    },
+  });
+}
+
+/** Inverter history for a range (same range semantics as the BMS history). */
+export function useInverterHistory(sel: RangeSel | null) {
+  const live = sel !== null && isLive(sel);
+  return useQuery({
+    queryKey: sel ? queryKeys.inverterHistory(sel) : ["inverter", "history", "pending"],
+    enabled: sel !== null,
+    queryFn: async () => {
+      const [from, to] = windowFor(sel!);
+      return { from, to, history: await api.inverterHistory(from, to) };
+    },
+    refetchInterval: live ? SLOW_MS : false,
+    staleTime: live ? 30_000 : Infinity,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export type InverterHistoryData = NonNullable<ReturnType<typeof useInverterHistory>["data"]>;
 
 export function useSettings() {
   return useQuery({ queryKey: queryKeys.settings, queryFn: api.settings, refetchInterval: SLOW_MS });

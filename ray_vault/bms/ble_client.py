@@ -7,7 +7,9 @@ Recovery ladder while no cell data arrives:
   1. re-request cell info            every cell_rerequest_s
   2. disconnect and reconnect        after link_timeout_s without cell data on a connection
   3. power-cycle the BT adapter      after adapter_reset_after_s without cell data, then with doubling backoff
-  4. exit so systemd restarts us     after restart_after_resets adapter resets that didn't help
+  4. restart bluetoothd              after restart_after_resets adapter resets that didn't help (in-process, via
+                                     systemd D-Bus + polkit; the inverter keeps running). Only if that fails:
+                                     exit 75, and the systemd unit restarts bluetoothd and this service.
 """
 
 from __future__ import annotations
@@ -18,10 +20,12 @@ import logging
 import time
 from collections.abc import Callable
 
+from ..core.clock import now_ms
+from ..core.service import FatalDriverError
 from . import protocol as p
-from .bt_admin import connection_rssi, power_cycle_adapter
+from .bt_admin import connection_rssi, power_cycle_adapter, restart_bluetoothd
 from .source import OnEvent, OnFrame, OnLinkChange
-from .state import LINK_CONNECTED, LINK_CONNECTING, LINK_DISCONNECTED, LINK_SCANNING, BleStats, now_ms
+from .state import LINK_CONNECTED, LINK_CONNECTING, LINK_DISCONNECTED, LINK_SCANNING, BleStats
 
 log = logging.getLogger(__name__)
 
@@ -32,8 +36,10 @@ SUPERVISE_TICK_S = 1.0
 BACKOFF_S = (5, 10, 30)
 
 
-class LinkRecoveryExhausted(Exception):
-    """Adapter resets did not bring data back; the process should exit and let systemd restart it."""
+class LinkRecoveryExhausted(FatalDriverError):
+    """Even restarting bluetoothd failed; exit with 75 so systemd restarts bluetoothd and the service."""
+
+    exit_code = 75  # EX_TEMPFAIL; the unit's ExecStopPost restarts bluetooth.service on this code
 
 
 class RecoveryLadder:
@@ -68,6 +74,11 @@ class RecoveryLadder:
         if self.restart_after_resets and self.resets >= self.restart_after_resets:
             return "restart"
         return "reset"
+
+    def did_restart(self) -> None:
+        """bluetoothd was restarted: start a fresh round of adapter resets, after a long pause."""
+        self.resets = 0
+        self.next_reset_at = self.stalled_s() + self.max_interval_s
 
     def did_reset(self) -> None:
         self.resets += 1
@@ -124,10 +135,22 @@ class BleSource:
             return
         stalled = self.ladder.stalled_s()
         if action == "restart":
-            detail = f"no cell data for {stalled:.0f}s after {self.ladder.resets} adapter reset(s); exiting"
-            log.error(detail)
-            on_event("service_restart", detail)
-            raise LinkRecoveryExhausted(detail)
+            self.stats.recovery_stage = "bluetoothd_restart"
+            on_link_change(LINK_DISCONNECTED)
+            log.warning(
+                "no cell data for %.0fs after %d adapter reset(s); restarting bluetoothd", stalled, self.ladder.resets
+            )
+            try:
+                await restart_bluetoothd()
+            except Exception as e:
+                detail = f"no cell data for {stalled:.0f}s; restarting bluetoothd failed ({e}); exiting"
+                log.error(detail)
+                on_event("service_restart", detail)
+                raise LinkRecoveryExhausted(detail) from e
+            on_event("bluetoothd_restart", f"after {stalled:.0f}s without cell data")
+            self.ladder.did_restart()
+            self.stats.bluetoothd_restarts += 1
+            return
 
         self.stats.recovery_stage = "adapter_reset"
         on_link_change(LINK_DISCONNECTED)

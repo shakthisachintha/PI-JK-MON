@@ -1,0 +1,12 @@
+// Let the Ray Vault service restart bluetoothd (its last-resort BLE recovery) without root.
+// Installed to /etc/polkit-1/rules.d/ by deploy/install.sh.
+polkit.addRule(function (action, subject) {
+  if (
+    action.id == "org.freedesktop.systemd1.manage-units" &&
+    action.lookup("unit") == "bluetooth.service" &&
+    action.lookup("verb") == "restart" &&
+    subject.user == "rayvault"
+  ) {
+    return polkit.Result.YES;
+  }
+});

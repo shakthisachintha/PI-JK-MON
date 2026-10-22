@@ -15,7 +15,7 @@ build/
 frames/
 
 # Dashboard build output (built from web/)
-jkbms_pi/static/
+ray_vault/static/
 
 # Web
 web/node_modules/

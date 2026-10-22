@@ -8,11 +8,12 @@ import math
 import random
 import time
 
+from ..core.clock import now_ms
 from . import protocol as p
 from .source import OnEvent, OnFrame, OnLinkChange
-from .state import LINK_CONNECTED, LINK_CONNECTING, LINK_SCANNING, BleStats, now_ms
+from .state import LINK_CONNECTED, LINK_CONNECTING, LINK_SCANNING, BleStats
 
-CELLS = 16
+CELLS = 8  # 8S LFP, 24 V nominal, like the real Ray Vault pack
 NOMINAL_AH = 280.0
 DAY_S = 86_400
 
@@ -94,10 +95,10 @@ def synth_cells(t: float, soc: float, cycles: int, rng: random.Random) -> p.Cell
     delta = round(max(cells) - min(cells), 3)
     balancing = delta > 0.008 and current > 0 and soc > 85
     return p.CellData(
-        cell_voltages=cells,
+        cell_voltages=cells + [0.0] * (p.MAX_CELLS - CELLS),  # unused slots read 0 V, as on a real JK
         avg_cell_voltage=round(voltage / CELLS, 3),
         delta_cell_voltage=delta,
-        wire_resist=list(_WIRE_RESIST),
+        wire_resist=list(_WIRE_RESIST) + [0.0] * (p.MAX_CELLS - CELLS),
         temp_mos=round(ambient + 4 + abs(current) * 0.05 + rng.gauss(0, 0.1), 1),
         voltage=voltage,
         current=current,

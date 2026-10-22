@@ -46,7 +46,12 @@ export function LiveTiles({ c }: { c: Current | null }) {
         </div>
       </Tile>
 
-      <Tile label="Pack voltage" value={fmt(c?.voltage, 2)} unit="V" sub={`avg cell ${fmt(c?.avg_cell_voltage, 3)} V`} />
+      <Tile
+        label="Pack voltage"
+        value={fmt(c?.voltage, 2)}
+        unit="V"
+        sub={`avg cell ${fmt(c?.avg_cell_voltage, 3)} V`}
+      />
       <Tile label="Current" value={fmt(flow, 2)} unit="A" tone={flowTone} sub={flowLabel} />
       <Tile
         label="Power"

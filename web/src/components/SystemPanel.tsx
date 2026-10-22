@@ -7,19 +7,33 @@ import { useSystem } from "@/lib/queries";
 import { SignalBars } from "./SignalBars";
 import { Card, SectionHead, Tile as Stat, TileGrid, type Tone } from "./ui";
 
-const STAGE: Record<SystemInfo["ble"]["recovery_stage"], { text: string; tone: Tone }> = {
+type BleInfo = NonNullable<SystemInfo["ble"]>;
+type InverterInfo = NonNullable<SystemInfo["inverter"]>;
+
+const STAGE: Record<BleInfo["recovery_stage"], { text: string; tone: Tone }> = {
   ok: { text: "Healthy", tone: "ok" },
   rerequesting: { text: "Re-requesting data", tone: "warn" },
   reconnecting: { text: "Reconnecting", tone: "warn" },
   adapter_reset: { text: "Resetting adapter", tone: "bad" },
+  bluetoothd_restart: { text: "Restarting Bluetooth", tone: "bad" },
+};
+
+const INVERTER_LINK: Record<InverterInfo["link"], { text: string; tone: Tone }> = {
+  connected: { text: "Connected", tone: "ok" },
+  connecting: { text: "Connecting", tone: "warn" },
+  no_response: { text: "Not responding", tone: "bad" },
+  port_missing: { text: "Adapter missing", tone: "bad" },
+  disabled: { text: "Disabled", tone: "" },
 };
 
 function powerStatus(p: SystemInfo["host"]["power"]): { text: string; tone: Tone; sub: string } {
   if (!p) return { text: "–", tone: "", sub: "not available" };
   if (p.under_voltage_now) return { text: "Under-voltage", tone: "bad", sub: "Supply too weak right now" };
-  const now = [p.throttled_now && "throttled", p.freq_capped_now && "freq capped", p.soft_temp_limit_now && "temp limit"].filter(
-    Boolean,
-  );
+  const now = [
+    p.throttled_now && "throttled",
+    p.freq_capped_now && "freq capped",
+    p.soft_temp_limit_now && "temp limit",
+  ].filter(Boolean);
   if (now.length) return { text: "Limited", tone: "warn", sub: `Now: ${now.join(", ")}` };
   const past = [
     p.under_voltage_occurred && "under-voltage",
@@ -35,6 +49,8 @@ export function SystemPanel() {
   const sys = useSystem().data;
   const h = sys?.host;
   const b = sys?.ble;
+  const inv = sys?.inverter;
+  const invLink = inv ? INVERTER_LINK[inv.link] : null;
   const temp = h?.cpu_temp_c ?? null;
   const tempTone: Tone = temp === null ? "" : temp >= 80 ? "bad" : temp >= 70 ? "warn" : "ok";
   const power = powerStatus(h?.power ?? null);
@@ -49,9 +65,13 @@ export function SystemPanel() {
 
   return (
     <Card>
-      <SectionHead title="Raspberry Pi & link">
+      <SectionHead title="Raspberry Pi & links">
         <span className="text-xs text-muted">
-          {h ? [h.model ?? h.hostname, h.uptime_s !== null ? `up ${fmtDuration(h.uptime_s)}` : null].filter(Boolean).join(" · ") : "Loading…"}
+          {h
+            ? [h.model ?? h.hostname, h.uptime_s !== null ? `up ${fmtDuration(h.uptime_s)}` : null]
+                .filter(Boolean)
+                .join(" · ")
+            : "Loading…"}
         </span>
       </SectionHead>
       <TileGrid label="Raspberry Pi and link health">
@@ -86,12 +106,28 @@ export function SystemPanel() {
           }
         />
         <Stat
+          label="Inverter link"
+          value={invLink?.text ?? "–"}
+          tone={invLink?.tone}
+          sub={
+            inv
+              ? `${inv.port ?? ""}${inv.last_error ? ` · ${inv.last_error}` : ""} · ${inv.counters.reopens} reopen${inv.counters.reopens === 1 ? "" : "s"}, ${inv.counters.polls_failed} failed polls`
+              : "Not configured"
+          }
+        />
+        <Stat
           label="Power supply"
           value={power.text}
           tone={power.tone}
           sub={`${power.sub}${h?.core_volts != null ? ` · core ${fmt(h.core_volts, 2)} V` : ""}`}
         />
-        <Stat label="CPU temperature" value={fmt(temp, 1)} unit="°C" tone={tempTone} sub={temp !== null && temp >= 80 ? "Throttling likely" : undefined} />
+        <Stat
+          label="CPU temperature"
+          value={fmt(temp, 1)}
+          unit="°C"
+          tone={tempTone}
+          sub={temp !== null && temp >= 80 ? "Throttling likely" : undefined}
+        />
         <Stat
           label="CPU"
           value={fmt(h?.cpu_percent, 0)}
@@ -105,7 +141,11 @@ export function SystemPanel() {
           unit="%"
           tone={memTone}
           meter={mem?.percent}
-          sub={mem ? `${mem.used_mb} / ${mem.total_mb} MB${mem.swap_used_mb ? ` · swap ${mem.swap_used_mb} MB` : ""}` : undefined}
+          sub={
+            mem
+              ? `${mem.used_mb} / ${mem.total_mb} MB${mem.swap_used_mb ? ` · swap ${mem.swap_used_mb} MB` : ""}`
+              : undefined
+          }
         />
         <Stat
           label="Storage"

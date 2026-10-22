@@ -3,11 +3,11 @@ import asyncio
 import bleak
 import pytest
 
-from jkbms_pi import ble_client
-from jkbms_pi import protocol as p
-from jkbms_pi.ble_client import BleSource, RecoveryLadder
-from jkbms_pi.fake_source import FAKE_SETTINGS
-from jkbms_pi.system import decode_throttled
+from ray_vault.bms import ble_client
+from ray_vault.bms import protocol as p
+from ray_vault.bms.ble_client import BleSource, RecoveryLadder
+from ray_vault.bms.fake import FAKE_SETTINGS
+from ray_vault.core.system import decode_throttled
 
 # --- recovery ladder ------------------------------------------------------------
 
@@ -80,7 +80,7 @@ class FakeClient:
     async def _stream(self):
         import random
 
-        from jkbms_pi.fake_source import synth_cells
+        from ray_vault.bms.fake import synth_cells
 
         frame = p.encode_cells(synth_cells(0, 50, 1, random.Random(0)))
         while True:
@@ -154,7 +154,11 @@ def test_stalled_source_resets_adapter_then_gives_up(monkeypatch):
         resets.append(adapter)
         return "test"
 
+    async def restart_fails():
+        raise RuntimeError("Access denied")
+
     monkeypatch.setattr(ble_client, "power_cycle_adapter", fake_reset)
+    monkeypatch.setattr(ble_client, "restart_bluetoothd", restart_fails)
     src = BleSource("aa:bb:cc:dd:ee:ff", adapter_reset_after_s=0, restart_after_resets=2)
     events = []
 
@@ -168,6 +172,31 @@ def test_stalled_source_resets_adapter_then_gives_up(monkeypatch):
     assert resets == ["hci0", "hci0"]
     assert events == ["adapter_reset", "adapter_reset", "service_restart"]
     assert src.stats.adapter_resets == 2
+
+
+def test_stalled_source_restarts_bluetoothd_in_process(monkeypatch):
+    """With polkit allowing it, the last resort restarts bluetoothd and keeps the process (and inverter) running."""
+    calls = []
+
+    async def ok(*_a):
+        calls.append("x")
+        return "test"
+
+    monkeypatch.setattr(ble_client, "power_cycle_adapter", ok)
+    monkeypatch.setattr(ble_client, "restart_bluetoothd", ok)
+    src = BleSource(
+        "aa:bb:cc:dd:ee:ff", adapter_reset_after_s=0, adapter_reset_max_interval_s=0, restart_after_resets=1
+    )
+    events = []
+
+    async def go():
+        for _ in range(4):
+            await src._recover_if_stalled(lambda _s: None, lambda t, d=None: events.append(t))
+            src.ladder.next_reset_at = 0
+
+    asyncio.run(go())  # no exception
+    assert events == ["adapter_reset", "bluetoothd_restart", "adapter_reset", "bluetoothd_restart"]
+    assert src.stats.bluetoothd_restarts == 2
 
 
 # --- Pi throttle flags -------------------------------------------------------------
@@ -198,7 +227,7 @@ PI_FILES = {
 
 
 def test_pi_readers(monkeypatch, tmp_path):
-    from jkbms_pi import system
+    from ray_vault.core import system
 
     stat = iter(["cpu  100 0 100 800 0 0 0 0 0 0", "cpu  150 0 150 850 50 0 0 0 0 0"])
     files = dict(PI_FILES)

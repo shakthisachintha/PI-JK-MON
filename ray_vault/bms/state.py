@@ -1,20 +1,16 @@
-"""In-memory latest state shared by the source, sampler and HTTP API (§6)."""
+"""In-memory latest BMS state shared by the source, driver and HTTP API."""
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 
+from ..core.clock import now_ms
 from .protocol import CellData, active_cell_count
 
 LINK_SCANNING = "scanning"
 LINK_CONNECTING = "connecting"
 LINK_CONNECTED = "connected"
 LINK_DISCONNECTED = "disconnected"
-
-
-def now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 @dataclass
@@ -33,8 +29,9 @@ class BleStats:
     rssi_ts: int | None = None  # UTC epoch ms
     rssi_source: str | None = None  # "connection" (live) or "scan" (last advertisement)
     adapter_resets: int = 0
+    bluetoothd_restarts: int = 0
     last_adapter_reset_ts: int | None = None
-    recovery_stage: str = "ok"  # ok | rerequesting | reconnecting | adapter_reset
+    recovery_stage: str = "ok"  # ok | rerequesting | reconnecting | adapter_reset | bluetoothd_restart
 
 
 @dataclass

@@ -1,0 +1,26 @@
+[Unit]
+Description=Ray Vault (JK BMS + SRNE inverter monitor)
+After=bluetooth.target network-online.target
+Wants=bluetooth.target network-online.target
+
+[Service]
+# notify: the service reports READY once the HTTP server is up, then sends watchdog pings while healthy.
+Type=notify
+NotifyAccess=main
+WatchdogSec=60
+User=rayvault
+Group=rayvault
+# bluetooth: BlueZ D-Bus · video: vcgencmd (Pi power flags) · dialout: RS485 adapter for the inverter
+SupplementaryGroups=bluetooth video dialout
+# CAP_NET_RAW: raw HCI "Read RSSI" for the live BMS signal. CAP_NET_ADMIN: btmgmt (RSSI fallback, adapter power).
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+ExecStart=/opt/ray-vault/venv/bin/python -m ray_vault --config /etc/ray-vault/config.toml
+# Exit code 75 = BLE recovery exhausted and the in-process bluetoothd restart failed:
+# restart BlueZ here (as root, "+") before the service comes back.
+ExecStopPost=+/bin/sh -c 'if [ "$EXIT_STATUS" = "75" ]; then systemctl restart bluetooth.service; fi'
+Restart=always
+RestartSec=5
+StateDirectory=ray-vault
+
+[Install]
+WantedBy=multi-user.target

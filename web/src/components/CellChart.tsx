@@ -17,9 +17,7 @@ export function CellChart({ c }: { c: Current | null }) {
   const resist = c?.wire_resist ?? [];
 
   // Unused slots read 0.000 V when the BMS has not reported its cell count (spec §5.5).
-  const cells = volts
-    .map((v, i) => ({ n: i + 1, v, r: resist[i] ?? null }))
-    .filter((x) => x.v > 0);
+  const cells = volts.map((v, i) => ({ n: i + 1, v, r: resist[i] ?? null })).filter((x) => x.v > 0);
 
   if (!cells.length) {
     return (

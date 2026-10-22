@@ -1,166 +1,60 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
 
 import { api, type HistoryPoint } from "@/lib/api";
 import { baseTimeOptions, series, withGaps } from "@/lib/chartSetup";
 import { useChartColors, type ChartColors } from "@/lib/hooks";
 import { useHistory, type HistoryData } from "@/lib/queries";
-import {
-  DEFAULT_RANGE,
-  EXPORT_MAX_SPAN,
-  RANGE_KEYS,
-  readHash,
-  toLocalInput,
-  windowFor,
-  writeHash,
-  type RangeKey,
-  type RangeSel,
-} from "@/lib/range";
 
-import { Banner, buttonClass, Card, Empty, SectionHead, Segmented } from "./ui";
+import { ChartCard, HistoryFrame, NoData, useRangeSelection } from "./HistoryFrame";
+import { Segmented } from "./ui";
 
+/** BMS history: voltage/SOC, current/power, temperatures, per-cell voltages. */
 export function History() {
   const colors = useChartColors();
-  const [sel, setSel] = useState<RangeSel | null>(null); // null until the URL hash is read on the client
+  const range = useRangeSelection();
   const [cellMode, setCellMode] = useState<"cells" | "delta">("cells");
-  const [draft, setDraft] = useState<{ from: string; to: string }>({ from: "", to: "" });
-  const query = useHistory(sel);
+  const query = useHistory(range.sel);
   const data = query.data;
 
-  useEffect(() => {
-    const init = readHash();
-    setSel(init);
-    const [f, t] = windowFor(init);
-    setDraft({ from: toLocalInput(f), to: toLocalInput(t) });
-    const onHash = () => setSel(readHash());
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
-
-  const choose = (next: RangeSel) => {
-    writeHash(next);
-    setSel(next);
-  };
-
-  const pickRange = (k: RangeKey) => {
-    if (k !== "custom") return choose({ key: k });
-    const [f, t] = windowFor(sel ?? DEFAULT_RANGE);
-    setDraft({ from: toLocalInput(f), to: toLocalInput(t) });
-    choose({ key: "custom", from: f, to: t });
-  };
-
-  const span = data ? data.to - data.from : 0;
-
   return (
-    <Card>
-      <SectionHead title="History">
-        <div className="flex flex-wrap items-center gap-2">
+    <HistoryFrame
+      title="Battery history"
+      range={range}
+      data={
+        data && {
+          from: data.from,
+          to: data.to,
+          meta: { points: data.history.points.length, bucket_s: data.history.bucket_s, source: data.history.source },
+        }
+      }
+      error={query.error}
+      fetching={query.isFetching}
+      exportUrl={api.exportUrl}
+    >
+      <ChartCard title="Voltage & SOC">{data ? <VoltageSoc d={data} c={colors} /> : null}</ChartCard>
+      <ChartCard title="Current & power">{data ? <CurrentPower d={data} c={colors} /> : null}</ChartCard>
+      <ChartCard title="Temperatures">{data ? <Temps d={data} c={colors} /> : null}</ChartCard>
+      <ChartCard
+        title="Cells"
+        extra={
           <Segmented
-            label="Time range"
-            value={sel?.key}
-            onChange={pickRange}
-            options={RANGE_KEYS.map((k) => ({ value: k, label: k }))}
+            label="Cell chart mode"
+            value={cellMode}
+            onChange={setCellMode}
+            options={[
+              { value: "cells", label: "Cells + Δ" },
+              { value: "delta", label: "Δ only" },
+            ]}
           />
-          {data ? (
-            <a
-              className={buttonClass}
-              href={api.exportUrl(data.from, data.to)}
-              aria-disabled={span > EXPORT_MAX_SPAN}
-              title={span > EXPORT_MAX_SPAN ? "CSV export is limited to 31 days" : "Download raw samples as CSV"}
-            >
-              CSV
-            </a>
-          ) : null}
-        </div>
-      </SectionHead>
-
-      {sel?.key === "custom" ? (
-        <form
-          className="mb-3 flex flex-wrap items-center gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const from = new Date(draft.from).getTime();
-            const to = new Date(draft.to).getTime();
-            if (from > 0 && to > from) choose({ key: "custom", from, to });
-          }}
-        >
-          <input
-            type="datetime-local"
-            className={buttonClass}
-            value={draft.from}
-            onChange={(e) => setDraft({ ...draft, from: e.target.value })}
-            aria-label="From"
-          />
-          <span className="text-xs text-muted">to</span>
-          <input
-            type="datetime-local"
-            className={buttonClass}
-            value={draft.to}
-            onChange={(e) => setDraft({ ...draft, to: e.target.value })}
-            aria-label="To"
-          />
-          <button className={buttonClass} type="submit">
-            Apply
-          </button>
-        </form>
-      ) : null}
-
-      {query.isError ? (
-        <div className="mb-3">
-          <Banner tone="bad">Could not load history: {query.error.message}</Banner>
-        </div>
-      ) : null}
-
-      <p className="mb-3 text-xs text-muted">
-        {data
-          ? `${data.history.points.length} points · ${data.history.bucket_s} s buckets from ${
-              data.history.source === "samples" ? "raw samples" : "1-minute rollups"
-            }`
-          : "Loading…"}
-        {query.isFetching && data ? " · refreshing…" : ""}
-      </p>
-
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,520px),1fr))] gap-4">
-        <ChartCard title="Voltage & SOC">{data ? <VoltageSoc d={data} c={colors} /> : null}</ChartCard>
-        <ChartCard title="Current & power">{data ? <CurrentPower d={data} c={colors} /> : null}</ChartCard>
-        <ChartCard title="Temperatures">{data ? <Temps d={data} c={colors} /> : null}</ChartCard>
-        <ChartCard
-          title="Cells"
-          extra={
-            <Segmented
-              label="Cell chart mode"
-              value={cellMode}
-              onChange={setCellMode}
-              options={[
-                { value: "cells", label: "Cells + Δ" },
-                { value: "delta", label: "Δ only" },
-              ]}
-            />
-          }
-        >
-          {data ? <Cells d={data} c={colors} mode={cellMode} /> : null}
-        </ChartCard>
-      </div>
-    </Card>
+        }
+      >
+        {data ? <Cells d={data} c={colors} mode={cellMode} /> : null}
+      </ChartCard>
+    </HistoryFrame>
   );
-}
-
-function ChartCard({ title, extra, children }: { title: string; extra?: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <div>
-      <h3 className="mb-2 flex items-center justify-between gap-2 text-sm font-semibold">
-        {title}
-        {extra}
-      </h3>
-      <div className="relative h-56 sm:h-64">{children ?? <Empty>Loading…</Empty>}</div>
-    </div>
-  );
-}
-
-function NoData() {
-  return <Empty>No data in this range</Empty>;
 }
 
 type ChartProps = { d: HistoryData; c: ChartColors };
@@ -201,11 +95,19 @@ function VoltageSoc({ d, c }: ChartProps) {
         ...base,
         plugins: {
           ...base.plugins,
-          legend: { ...base.plugins.legend, labels: { ...base.plugins.legend.labels, filter: (i) => !i.text.startsWith("V m") } },
+          legend: {
+            ...base.plugins.legend,
+            labels: { ...base.plugins.legend.labels, filter: (i) => !i.text.startsWith("V m") },
+          },
         },
         scales: {
           ...base.scales,
-          y: { position: "left", ticks: { color: c.muted }, grid: { color: c.grid }, title: { display: true, text: "V", color: c.muted } },
+          y: {
+            position: "left",
+            ticks: { color: c.muted },
+            grid: { color: c.grid },
+            title: { display: true, text: "V", color: c.muted },
+          },
           y1: {
             position: "right",
             min: 0,
@@ -236,8 +138,18 @@ function CurrentPower({ d, c }: ChartProps) {
         ...base,
         scales: {
           ...base.scales,
-          y: { position: "left", ticks: { color: c.muted }, grid: { color: c.grid }, title: { display: true, text: "A", color: c.muted } },
-          y1: { position: "right", ticks: { color: c.muted }, grid: { display: false }, title: { display: true, text: "W", color: c.muted } },
+          y: {
+            position: "left",
+            ticks: { color: c.muted },
+            grid: { color: c.grid },
+            title: { display: true, text: "A", color: c.muted },
+          },
+          y1: {
+            position: "right",
+            ticks: { color: c.muted },
+            grid: { display: false },
+            title: { display: true, text: "W", color: c.muted },
+          },
         },
       }}
     />
@@ -261,7 +173,11 @@ function Temps({ d, c }: ChartProps) {
         ...base,
         scales: {
           ...base.scales,
-          y: { ticks: { color: c.muted }, grid: { color: c.grid }, title: { display: true, text: "°C", color: c.muted } },
+          y: {
+            ticks: { color: c.muted },
+            grid: { color: c.grid },
+            title: { display: true, text: "°C", color: c.muted },
+          },
         },
       }}
     />
@@ -315,12 +231,28 @@ function Cells({ d, c, mode }: ChartProps & { mode: "cells" | "delta" }) {
           mode === "cells"
             ? {
                 ...base.scales,
-                y: { position: "left", ticks: { color: c.muted }, grid: { color: c.grid }, title: { display: true, text: "V", color: c.muted } },
-                y1: { position: "right", min: 0, ticks: { color: c.muted }, grid: { display: false }, title: { display: true, text: "Δ mV", color: c.muted } },
+                y: {
+                  position: "left",
+                  ticks: { color: c.muted },
+                  grid: { color: c.grid },
+                  title: { display: true, text: "V", color: c.muted },
+                },
+                y1: {
+                  position: "right",
+                  min: 0,
+                  ticks: { color: c.muted },
+                  grid: { display: false },
+                  title: { display: true, text: "Δ mV", color: c.muted },
+                },
               }
             : {
                 ...base.scales,
-                y: { min: 0, ticks: { color: c.muted }, grid: { color: c.grid }, title: { display: true, text: "Δ mV", color: c.muted } },
+                y: {
+                  min: 0,
+                  ticks: { color: c.muted },
+                  grid: { color: c.grid },
+                  title: { display: true, text: "Δ mV", color: c.muted },
+                },
               },
       }}
     />

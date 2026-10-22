@@ -58,6 +58,33 @@ async def _dbus_set_powered(adapter: str, on: bool) -> None:
         bus.disconnect()
 
 
+async def restart_bluetoothd(settle_s: float = 5) -> None:
+    """Restart bluetooth.service via systemd's D-Bus API.
+
+    Allowed for the service user by deploy/50-ray-vault.rules (polkit); raises if not permitted or it fails.
+    """
+    from dbus_fast import BusType, Message, MessageType
+    from dbus_fast.aio import MessageBus
+
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    try:
+        reply = await bus.call(
+            Message(
+                destination="org.freedesktop.systemd1",
+                path="/org/freedesktop/systemd1",
+                interface="org.freedesktop.systemd1.Manager",
+                member="RestartUnit",
+                signature="ss",
+                body=["bluetooth.service", "replace"],
+            )
+        )
+        if reply.message_type == MessageType.ERROR:
+            raise RuntimeError(f"{reply.error_name}: {' '.join(map(str, reply.body))}")
+    finally:
+        bus.disconnect()
+    await asyncio.sleep(settle_s)  # let bluetoothd re-register the adapter
+
+
 async def power_cycle_adapter(adapter: str, settle_s: float = 3) -> str:
     """Power the adapter off and on again. Returns the method used; raises RuntimeError if all fail."""
     errors = []

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = resolve(here, "../out");
-const dest = resolve(here, "../../jkbms_pi/static");
+const dest = resolve(here, "../../ray_vault/static");
 
 if (!existsSync(resolve(src, "index.html"))) {
   console.error(`static export not found at ${src}`);

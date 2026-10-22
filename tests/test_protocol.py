@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from jkbms_pi import protocol as p
-from jkbms_pi.fake_source import FAKE_DEVICE_INFO, FAKE_SETTINGS
+from ray_vault.bms import protocol as p
+from ray_vault.bms.fake import FAKE_DEVICE_INFO, FAKE_SETTINGS
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -188,7 +188,7 @@ def test_decode_device_info_drops_passcodes():
 
 
 def test_decode_frame_dispatch():
-    assert p.decode_frame(p.encode_settings(FAKE_SETTINGS)).settings["cell_count"] == 16
+    assert p.decode_frame(p.encode_settings(FAKE_SETTINGS)).settings["cell_count"] == 8
     assert p.decode_frame(p.encode_device_info(FAKE_DEVICE_INFO)).device_info["device_name"] == "FAKE-BMS"
     unknown = p.decode_frame(_seal(_blank(0x07)))
     assert unknown.type == 0x07 and unknown.cells is None and unknown.settings is None

@@ -1,6 +1,6 @@
 #!/bin/bash
 # <swiftbar.title>JK BMS</swiftbar.title>
-# <swiftbar.desc>Battery SOC, power and cell data from the jkbms-pi service.</swiftbar.desc>
+# <swiftbar.desc>Battery SOC, power, cells, and solar/load/inverter status from the Ray Vault service.</swiftbar.desc>
 # <swiftbar.dependencies>curl, jq (both ship with macOS 15+)</swiftbar.dependencies>
 # <swiftbar.hideAbout>true</swiftbar.hideAbout>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
@@ -46,8 +46,15 @@ else
   exit 0
 fi
 
+# Solar / load / inverter from the combined overview (Ray Vault 2+). Optional: skipped if unavailable.
+ov=null
+if ! $offline; then
+  ov=$(curl -fsS --max-time 3 "$JKBMS_URL/api/overview" 2>/dev/null) && jq -e . >/dev/null 2>&1 <<<"$ov" || ov=null
+fi
+
 jq -r \
   --arg url "$JKBMS_URL" \
+  --argjson ov "$ov" \
   --argjson offline "$offline" \
   --argjson fetched "${fetched:-0}" \
   --argjson now "$(date +%s)" '
@@ -112,6 +119,14 @@ def grey: "#667085,#8d99a8";
          else "" end)")
    else empty end),
   "---",
+  (if $ov != null and $ov.inverter.link != "disabled" then
+     "Solar             \($ov.pv_power | power) | font=Menlo size=12 color=\(if ($ov.pv_power // 0) > 0 then green else "" end)",
+     "Load              \($ov.load_power | power) | font=Menlo size=12",
+     "Grid              \($ov.grid_voltage | fx(0)) V | font=Menlo size=12",
+     "Inverter          \($ov.machine_state // "–") · \($ov.inverter.link | gsub("_"; " ")) | font=Menlo size=12 color=\(if $ov.inverter.link == "connected" and ($ov.inverter.fault_codes | length) == 0 then "" else amber end)",
+     (if ($ov.inverter.fault_codes | length) > 0 then "Inverter faults   \($ov.inverter.fault_codes | map(tostring) | join(", ")) | font=Menlo size=12 color=\(red)" else empty end),
+     "---"
+   else empty end),
   "Temperatures      T1 \($d.temp_t1 | fx(1))°  T2 \($d.temp_t2 | fx(1))°  MOS \($d.temp_mos | fx(1))° | font=Menlo size=12",
   "Switches          charge \($d.charge_on | onoff) · discharge \($d.discharge_on | onoff) · balance \($d.balance_on | onoff) | font=Menlo size=12 color=\(if ($d.charge_on and $d.discharge_on) then "" else amber end)",
   "Cycles            \($d.cycle_count // "–") | font=Menlo size=12",

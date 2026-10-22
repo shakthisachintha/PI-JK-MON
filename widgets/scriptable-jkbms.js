@@ -28,14 +28,27 @@ const C = {
 const fm = FileManager.local();
 const cachePath = fm.joinPath(fm.cacheDirectory(), CACHE);
 
+// Solar / load from the combined overview (Ray Vault 2+); optional, null if unavailable.
+async function loadOverview() {
+  try {
+    const req = new Request(`${BASE}/api/overview`);
+    req.timeoutInterval = 5;
+    const ov = await req.loadJSON();
+    return req.response.statusCode === 200 && ov.inverter && ov.inverter.link !== "disabled" ? ov : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function load() {
   try {
     const req = new Request(`${BASE}/api/current`);
     req.timeoutInterval = 8;
     const data = await req.loadJSON();
     if (req.response.statusCode !== 200) throw new Error(`HTTP ${req.response.statusCode}`);
-    fm.writeString(cachePath, JSON.stringify({ fetched: Date.now(), data }));
-    return { data, fetched: Date.now(), offline: false };
+    const ov = await loadOverview();
+    fm.writeString(cachePath, JSON.stringify({ fetched: Date.now(), data, ov }));
+    return { data, ov, fetched: Date.now(), offline: false };
   } catch (e) {
     // Away from home WiFi (or Pi down): show the last values we saw.
     if (fm.fileExists(cachePath)) {
@@ -150,10 +163,17 @@ function medium(w, r) {
     text(line, v, 12, color, "semibold");
     right.addSpacer(3);
   };
+  const ov = r.ov;
+  if (ov) {
+    kv("Solar", fmtPower(ov.pv_power), ov.pv_power > 0 ? C.charge : C.text);
+    kv("Load", fmtPower(ov.load_power));
+  }
   kv("Remaining", `${fmt(d.capacity_remain, 0)} / ${fmt(d.nominal_capacity, 0)} Ah`);
   kv("Cell spread", d.delta_cell_voltage == null ? "–" : `${Math.round(d.delta_cell_voltage * 1000)} mV`);
-  kv("Cells", `${fmt(d.min_cell_voltage, 3)}–${fmt(d.max_cell_voltage, 3)}`);
-  kv("Temp", `${fmt(d.temp_t1)}° / ${fmt(d.temp_mos)}°`);
+  if (!ov) {
+    kv("Cells", `${fmt(d.min_cell_voltage, 3)}–${fmt(d.max_cell_voltage, 3)}`);
+    kv("Temp", `${fmt(d.temp_t1)}° / ${fmt(d.temp_mos)}°`);
+  }
   const sw = (on) => (on ? "on" : "off");
   kv("Chg / Dis", `${sw(d.charge_on)} / ${sw(d.discharge_on)}`, d.charge_on && d.discharge_on ? C.ok : C.warn);
 }

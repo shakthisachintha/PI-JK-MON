@@ -16,8 +16,7 @@ import "chartjs-adapter-date-fns";
 
 Chart.register(BarElement, CategoryScale, Filler, Legend, LinearScale, LineElement, PointElement, TimeScale, Tooltip);
 
-Chart.defaults.font.family =
-  'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+Chart.defaults.font.family = 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 Chart.defaults.font.size = 11;
 Chart.defaults.animation = false;
 Chart.defaults.maintainAspectRatio = false;
@@ -59,7 +58,13 @@ export function baseTimeOptions(theme: ChartTheme, from: number, to: number) {
     elements: { point: { radius: 0, hitRadius: 6 }, line: { borderWidth: 1.5, tension: 0 } },
     plugins: {
       legend: { labels: { color: theme.text, boxWidth: 12, boxHeight: 2 } },
-      tooltip: { backgroundColor: theme.surface, titleColor: theme.text, bodyColor: theme.text, borderColor: theme.grid, borderWidth: 1 },
+      tooltip: {
+        backgroundColor: theme.surface,
+        titleColor: theme.text,
+        bodyColor: theme.text,
+        borderColor: theme.grid,
+        borderWidth: 1,
+      },
     },
     scales: {
       x: {

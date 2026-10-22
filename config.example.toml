@@ -1,42 +1,46 @@
-# JK BMS monitor configuration. Copy to /etc/jkbms-pi/config.toml.
-# Every key can be overridden with an environment variable: JKBMS_<KEY>, e.g. JKBMS_BMS_MAC.
+# Ray Vault configuration. Installed as /etc/ray-vault/config.toml (mode 640: it holds the control PIN).
+# Any key can be overridden with an environment variable RAYVAULT_<SECTION>_<KEY>, e.g. RAYVAULT_BMS_MAC.
 
-# BLE MAC address of the BMS (any letter case). Required unless running with --fake.
-bms_mac = "c8:47:80:71:44:d4"
+log_level = "INFO"
 
-# BlueZ adapter
+[http]
+host = "0.0.0.0"        # reachable from the LAN
+port = 8080
+
+[storage]
+db_path = "/var/lib/ray-vault/ray-vault.db"
+sample_interval_s = 3   # one stored row per device per interval while data is fresh
+stale_s = 10            # readings older than this are not stored, and are flagged stale in the API
+raw_retention_days = 30 # per-minute rollups are kept forever
+
+[bms]
+enabled = true
+mac = "c8:47:80:71:44:d4"  # BLE MAC of the JK BMS (any letter case)
 adapter = "hci0"
-
-# SQLite database file
-db_path = "/var/lib/jkbms-pi/jkbms.db"
-
-# HTTP server (0.0.0.0 = reachable from the LAN)
-http_host = "0.0.0.0"
-http_port = 8080
-
-# Store one reading every N seconds while data is fresh
-sample_interval_s = 3
-
-# Readings older than this are not stored, and are flagged stale in the API
-stale_s = 10
-
-# Keep raw samples this many days; per-minute rollups are kept forever
-raw_retention_days = 30
-
 # Link supervision and recovery, all driven by "time since the last cell-data frame":
-#   re-request cell info every cell_rerequest_s
-#   disconnect and reconnect after link_timeout_s
-#   power-cycle the Bluetooth adapter after adapter_reset_after_s, then again with doubling backoff
-#     (capped at adapter_reset_max_interval_s)
-#   after restart_after_resets resets that didn't help, exit; systemd restarts bluetoothd and this service
-#     (0 = never give up, keep resetting the adapter)
+#   re-request cell info every cell_rerequest_s; reconnect after link_timeout_s;
+#   power-cycle the Bluetooth adapter after adapter_reset_after_s, then with doubling backoff (capped);
+#   after restart_after_resets resets that didn't help, restart bluetoothd (0 = never)
 cell_rerequest_s = 5
 link_timeout_s = 20
 adapter_reset_after_s = 120
 adapter_reset_max_interval_s = 1800
 restart_after_resets = 3
+rssi_poll_s = 30         # how often to read the BMS signal strength while connected
 
-# How often to read the BMS signal strength (RSSI) while connected
-rssi_poll_s = 30
+[inverter]
+enabled = false
+# Use the stable by-id path of the USB-RS485 adapter (ls /dev/serial/by-id/), not /dev/ttyUSB0.
+port = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+baudrate = 9600
+slave = 1
+profile = "hf"           # register map: "hf" = SRNE HF series (HF2430). Verify with: python -m ray_vault probe-inverter
+poll_interval_s = 2
+settings_poll_s = 60
+timeout_s = 1.0
 
-log_level = "INFO"
+[control]
+# PIN required to change inverter settings from the dashboard. Leave empty to keep settings read-only.
+pin = ""
+max_failures = 5         # wrong PINs from one client within lockout_s ...
+lockout_s = 600          # ... lock that client out for this long
