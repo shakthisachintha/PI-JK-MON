@@ -14,60 +14,85 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from .bus import Bus, BusError, IllegalAddress
+from .bus import Bus, BusError, IllegalAddress, NoResponse
 from .driver import infer_system_voltage
 
 SCAN_RANGES = ((0xE000, 0xE040), (0xE200, 0xE230))
 
 
-async def _read_each(bus: Bus, addresses) -> dict[int, int | None]:
-    out: dict[int, int | None] = {}
+REJECTED = "rejected"
+TIMEOUT = "timeout"
+MAX_CONSECUTIVE_TIMEOUTS = 5
+
+
+async def _read_each(bus: Bus, addresses) -> dict[int, int | str]:
+    """Read registers one by one. Values are ints, or REJECTED / TIMEOUT. Raises after repeated timeouts."""
+    out: dict[int, int | str] = {}
+    timeouts = 0
     for a in addresses:
         try:
             out[a] = await bus.read_register(a)
+            timeouts = 0
         except IllegalAddress:
-            out[a] = None
+            out[a] = REJECTED
+            timeouts = 0
+        except NoResponse:
+            out[a] = TIMEOUT
+            timeouts += 1
+            if timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                raise
     return out
+
+
+def _ints(values: dict[int, int | str]) -> dict[int, int]:
+    return {a: v for a, v in values.items() if isinstance(v, int)}
 
 
 async def probe(bus: Bus, profile: ModuleType, out=print) -> int:
     prof = profile.PROFILE
     try:
-        info_regs = {}
+        info_regs: dict[int, int] = {}
         for b in prof.info_blocks:
-            info_regs.update({a: v for a, v in (await _read_each(bus, b.addresses)).items() if v is not None})
+            info_regs.update(_ints(await _read_each(bus, b.addresses)))
+
+        out(f"== Identity (profile: {prof.title})")
+        for k, v in profile.decode_info(info_regs).items():
+            out(f"  {k:22} {v}")
+
+        live = await _read_each(bus, [a for b in prof.live_blocks for a in b.addresses])
+        live_regs = _ints(live)
+        out("\n== Live values")
+        for r in prof.readings:
+            raw = live.get(r.address)
+            val = f"- ({raw})" if not isinstance(raw, int) else f"{r.decode(raw)} {r.unit}".strip()
+            out(f"  0x{r.address:04X}  {r.label:24} {val:>14}   raw={raw}")
+        hexbits, codes = profile.decode_faults(live_regs)
+        out(f"  faults: bits={hexbits} codes={codes or 'none'}")
+        skipped = sorted(a for a, v in live.items() if not isinstance(v, int))
+        if skipped:
+            out(f"  not readable on this unit: {', '.join(f'0x{a:04X}' for a in skipped)}")
+
+        settings: dict[int, int | str] = {}
+        for lo, hi in SCAN_RANGES:
+            out(f"\n(scanning settings 0x{lo:04X}-0x{hi - 1:04X}, one register at a time…)")
+            settings.update(await _read_each(bus, range(lo, hi)))
     except BusError as e:
         out(f"error: cannot talk to the inverter: {e}")
         return 1
 
-    out(f"== Identity (profile: {prof.title})")
-    for k, v in profile.decode_info(info_regs).items():
-        out(f"  {k:22} {v}")
-
-    live_regs: dict[int, int] = {}
-    for b in prof.live_blocks:
-        live_regs.update({a: v for a, v in (await _read_each(bus, b.addresses)).items() if v is not None})
-    out("\n== Live values")
-    for r in prof.readings:
-        raw = live_regs.get(r.address)
-        val = "-" if raw is None else f"{r.decode(raw)} {r.unit}".strip()
-        out(f"  0x{r.address:04X}  {r.label:24} {val:>14}   raw={raw}")
-    hexbits, codes = profile.decode_faults(live_regs)
-    out(f"  faults: bits={hexbits} codes={codes or 'none'}")
-
-    settings: dict[int, int | None] = {}
-    for lo, hi in SCAN_RANGES:
-        settings.update(await _read_each(bus, range(lo, hi)))
-    sv = infer_system_voltage(settings.get(prof.system_voltage_register), (live_regs.get(0x0101) or 0) / 10)
+    raw_sv = settings.get(prof.system_voltage_register)
+    sv = infer_system_voltage(raw_sv if isinstance(raw_sv, int) else None, (live_regs.get(0x0101) or 0) / 10)
     out(f"\n== Settings (system voltage used for scaling: {sv} V)")
-    known = {s.address: [] for s in prof.settings}
+    known: dict[int, list] = {}
     for s in prof.settings:
-        known[s.address].append(s)
+        known.setdefault(s.address, []).append(s)
+    missing = []
     for a, raw in settings.items():
         if a in known:
             for s in known[a]:
-                if raw is None:
-                    val = "- (rejected)"
+                if not isinstance(raw, int):
+                    val = f"- ({raw})"
+                    missing.append(s.label)
                 else:
                     v = s.from_raw(raw)
                     if s.kind == "enum":
@@ -77,6 +102,8 @@ async def probe(bus: Bus, profile: ModuleType, out=print) -> int:
                     else:
                         val = f"{v} {s.unit}".strip()
                 out(f"  0x{a:04X}  {s.label:30} {val}   raw={raw}")
-        elif raw is not None:
+        elif isinstance(raw, int):
             out(f"  0x{a:04X}  {'(not in profile)':30} raw={raw}")
+    if missing:
+        out(f"\nProfile settings this unit doesn't answer (they will show as empty): {', '.join(missing)}")
     return 0

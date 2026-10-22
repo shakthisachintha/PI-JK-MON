@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 
 SOURCE = "inverter"
 REOPEN_AFTER_FAILURES = 3
+DISCOVERY_MAX_TIMEOUTS = 3  # consecutive silent registers while probing a block = link down
 PORT_BACKOFF_S = (2, 5, 10, 30)
 NOMINAL_SYSTEM_VOLTAGES = (12, 24, 36, 48)
 
@@ -60,6 +61,18 @@ class InverterState:
         if self.live_ts is None:
             return None
         return max(0.0, ((at_ms or now_ms()) - self.live_ts) / 1000)
+
+
+def runs(addresses: list[int], max_count: int = 32) -> list[Block]:
+    """Group sorted addresses into contiguous blocks of at most max_count registers."""
+    out: list[Block] = []
+    for a in sorted(addresses):
+        last = out[-1] if out else None
+        if last and a == last.start + last.count and last.count < max_count:
+            out[-1] = Block(last.start, last.count + 1)
+        else:
+            out.append(Block(a, 1))
+    return out
 
 
 def infer_system_voltage(register_value: int | None, battery_voltage: float | None) -> int | None:
@@ -97,8 +110,7 @@ class InverterDriver:
         self.stale_s = stale_s
         self.state = state or InverterState()
         self.series = TimeSeries(store, SPEC)
-        self._split_blocks: set[Block] = set()  # blocks the device rejects as a whole
-        self._illegal: set[int] = set()  # single registers the device rejects
+        self._plans: dict[Block, list[Block]] = {}  # rejected blocks -> readable runs inside them
         self._refresh = asyncio.Event()
         self._io = asyncio.Lock()  # one logical operation (poll / read-modify-write) at a time
         self._failures = 0
@@ -217,23 +229,62 @@ class InverterDriver:
     # --- reads ---
 
     async def _read_blocks(self, blocks: tuple[Block, ...]) -> dict[int, int]:
+        """Read profile blocks, adapting to what this unit actually implements.
+
+        A block is read in one request when the inverter accepts it. If it rejects the block (SRNE units do
+        when it contains unimplemented registers), the registers are read one by one once, and from then on
+        the block is read as the contiguous runs of registers that answered.
+        """
         regs: dict[int, int] = {}
         for b in blocks:
-            if b not in self._split_blocks:
+            plan = self._plans.get(b)
+            if plan is None:
                 try:
                     regs.update(zip(b.addresses, await self.bus.read_block(b.start, b.count), strict=False))
                     continue
+                except IllegalAddress as e:
+                    log.info("inverter rejects block 0x%04X+%d (%s); probing its registers", b.start, b.count, e)
+                self._plans[b] = plan = await self._discover(b, regs)
+                log.info(
+                    "block 0x%04X+%d read as %s",
+                    b.start,
+                    b.count,
+                    ", ".join(f"0x{r.start:04X}+{r.count}" for r in plan),
+                )
+                continue
+            for run in plan:
+                try:
+                    regs.update(zip(run.addresses, await self.bus.read_block(run.start, run.count), strict=False))
                 except IllegalAddress:
-                    log.info("inverter rejects block 0x%04X+%d; reading registers one by one", b.start, b.count)
-                    self._split_blocks.add(b)
-            for a in b.addresses:
-                if a in self._illegal:
-                    continue
+                    log.warning("inverter now rejects 0x%04X+%d; re-probing next time", run.start, run.count)
+                    self._plans.pop(b, None)
+        return regs
+
+    async def _discover(self, b: Block, regs: dict[int, int]) -> list[Block]:
+        """Read a rejected block register by register; return the readable runs.
+
+        Some units time out on unimplemented registers instead of rejecting them. A register that times out
+        twice is treated as unreadable; several timeouts in a row mean the link itself is down (re-raised).
+        """
+        readable = []
+        timeouts = 0
+        for a in b.addresses:
+            for attempt in (1, 2):
                 try:
                     regs[a] = await self.bus.read_register(a)
+                    readable.append(a)
+                    timeouts = 0
+                    break
                 except IllegalAddress:
-                    self._illegal.add(a)
-        return regs
+                    timeouts = 0
+                    break
+                except NoResponse:
+                    if attempt == 2:
+                        timeouts += 1
+                        log.info("register 0x%04X doesn't answer; skipping it", a)
+                        if timeouts >= DISCOVERY_MAX_TIMEOUTS:
+                            raise
+        return runs(readable)
 
     async def _read_info(self) -> None:
         regs = await self._read_blocks(self.profile.info_blocks)

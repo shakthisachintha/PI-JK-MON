@@ -4,11 +4,18 @@ import pytest
 
 from ray_vault.bms import protocol as bp
 from ray_vault.bms.fake import FAKE_SETTINGS as BMS_SETTINGS
+from ray_vault.inverter.bus import IllegalAddress, ModbusBus, NoResponse
 from ray_vault.inverter.controls import ControlError, PinGuard, validate_value
-from ray_vault.inverter.driver import LINK_CONNECTED, LINK_NO_RESPONSE, LINK_PORT_MISSING, infer_system_voltage
+from ray_vault.inverter.driver import (
+    LINK_CONNECTED,
+    LINK_NO_RESPONSE,
+    LINK_PORT_MISSING,
+    infer_system_voltage,
+    runs,
+)
 from ray_vault.inverter.probe import probe
 from ray_vault.inverter.profiles import get_profile, hf
-from ray_vault.inverter.registers import Reading, SettingSpec
+from ray_vault.inverter.registers import Block, Reading, SettingSpec
 from tests.conftest import PIN, feed_bms, make_env
 
 # --- registers ------------------------------------------------------------------
@@ -97,9 +104,9 @@ def test_driver_polls_live_settings_and_info(tmp_path):
     snap = env.inverter.settings_snapshot()
     assert snap["output_priority"] == 2 and snap["charge_limit_voltage"] == 28.8
     assert snap["charge_cutoff_soc"] == 100 and snap["discharge_cutoff_soc"] == 15
-    # the fake rejects 0x0208-0x020B, so the 0x0200 block falls back to single reads, once
-    assert any(b.start == 0x0200 for b in env.inverter._split_blocks)
-    assert 0x0208 in env.inverter._illegal
+    # the fake rejects 0x0208-0x020B, so the 0x0200 block is read as the runs around them
+    plan = next(p for b, p in env.inverter._plans.items() if b.start == 0x0200)
+    assert [(r.start, r.count) for r in plan] == [(0x0200, 8), (0x020C, 0x19)]
     assert env.inverter.sample(st.live_ts)[0] == st.live_ts
     types = [e["type"] for e in env.store.events(source="inverter")]
     assert "inverter_connected" in types
@@ -297,4 +304,62 @@ def test_settings_schema_and_overview(tmp_path):
     assert ov["inverter"]["link"] == "connected" and "load_power" in ov
     hist = env.client.get("/api/inverter/history").json()
     assert hist["fields"] == ["pv_power", "load_power", "battery_power", "soc"]
+    env.store.close()
+
+
+def test_runs():
+    assert runs([5, 1, 2, 3, 7, 8]) == [Block(1, 3), Block(5, 1), Block(7, 2)]
+    assert runs(list(range(40)), max_count=32) == [Block(0, 32), Block(32, 8)]
+
+
+def test_bus_maps_srne_gateway_exception_to_rejection():
+    """SRNE answers unreadable blocks with Modbus exception 10; that must trigger the block fallback."""
+    import minimalmodbus
+
+    bus = ModbusBus("/dev/null")
+
+    class Inst:
+        def __init__(self, exc):
+            self.exc = exc
+
+        def read_registers(self, *a):
+            raise self.exc
+
+    for exc, expected in (
+        (minimalmodbus.SlaveReportedException("Slave reported gateway path unavailable"), IllegalAddress),
+        (minimalmodbus.IllegalRequestError("Slave reported illegal data address"), IllegalAddress),
+        (minimalmodbus.SlaveDeviceBusyError("Slave reported device busy"), NoResponse),
+        (minimalmodbus.NoResponseError("No communication"), NoResponse),
+    ):
+        bus._instrument = Inst(exc)
+        with pytest.raises(expected):
+            bus._call("read_registers", 0x0200, 37, 3)
+
+
+def test_driver_recovers_from_gateway_rejected_blocks(tmp_path):
+    """A unit that rejects whole blocks still connects and returns every readable register."""
+    env = make_env(tmp_path)
+    bus = env.inverter.bus
+    bus.illegal |= {
+        0x0103,
+        0x0104,
+        0x0105,
+        0x0106,
+        *range(0x000C, 0x0014),
+    }  # like the real HF2430: no DC load, no model
+    connected(env)
+    live = env.inverter.state.live
+    assert env.inverter.state.link == LINK_CONNECTED and live["battery_voltage"] and live["pv_power"] is not None
+    assert env.inverter.state.device["model"] in (None, "")
+    env.store.close()
+
+
+def test_driver_skips_registers_that_time_out(tmp_path):
+    """Unimplemented registers that time out (instead of being rejected) are skipped, not fatal."""
+    env = make_env(tmp_path)
+    env.inverter.bus.silent |= {0xE013, 0xE014}  # two silent registers inside the first settings block
+    connected(env)
+    assert env.inverter.state.link == LINK_CONNECTED
+    assert env.inverter.settings_snapshot()["output_priority"] == 2
+    assert env.inverter.settings_snapshot()["boost_charge_time"] == 120  # E012, next to the silent ones
     env.store.close()

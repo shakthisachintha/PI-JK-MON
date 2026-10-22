@@ -31,7 +31,12 @@ class NoResponse(BusError):
 
 
 class IllegalAddress(BusError):
-    """The inverter rejected the register range (Modbus exception 1/2/3)."""
+    """The inverter answered but rejected the request (any Modbus exception except "busy").
+
+    Standard devices answer an unreadable range with exception 2 (illegal address); SRNE firmware also uses
+    10 (gateway path unavailable) for blocks that contain unimplemented registers. Either way the link is fine
+    and the caller should read a smaller range.
+    """
 
 
 class Bus(Protocol):
@@ -89,7 +94,9 @@ class ModbusBus:
             time.sleep(gap)
         try:
             return getattr(inst, fn_name)(*args)
-        except minimalmodbus.IllegalRequestError as e:
+        except minimalmodbus.SlaveDeviceBusyError as e:
+            raise NoResponse(str(e)) from e  # transient: retry later
+        except minimalmodbus.SlaveReportedException as e:
             raise IllegalAddress(str(e)) from e
         except (minimalmodbus.NoResponseError, minimalmodbus.InvalidResponseError) as e:
             raise NoResponse(str(e)) from e

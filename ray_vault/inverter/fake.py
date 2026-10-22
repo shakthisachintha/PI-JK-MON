@@ -130,6 +130,7 @@ class FakeBus:
         self.regs.update(_ascii_regs("HF2430S80-H", 0x000C, 8, low_only=False))
         self.regs.update(_ascii_regs("FAKE0000000000000001", 0x0035, 0x14, low_only=True))
         self.illegal: set[int] = {0x0208, 0x0209, 0x020A, 0x020B}  # "reserved" registers some units reject
+        self.silent: set[int] = set()  # tests: registers that time out instead of being rejected
         self.fail_next = 0  # tests: make the next N calls raise NoResponse
         self.port_missing = False  # tests: simulate an unplugged adapter
         self.writes: list[tuple[int, int]] = []
@@ -191,6 +192,8 @@ class FakeBus:
     def _get(self, a: int) -> int:
         if a in self.illegal:
             raise IllegalAddress(f"0x{a:04X}")
+        if a in self.silent:
+            raise NoResponse(f"0x{a:04X} timed out")
         if 0x0100 <= a < 0x0300:
             return self._live().get(a, 0)
         return self.regs.get(a, 0)
@@ -198,7 +201,7 @@ class FakeBus:
     async def read_block(self, start: int, count: int) -> list[int]:
         await asyncio.sleep(0)
         self._check()
-        if any(a in self.illegal for a in range(start, start + count)):
+        if any(a in self.illegal or a in self.silent for a in range(start, start + count)):
             raise IllegalAddress(f"block 0x{start:04X}+{count}")
         live = self._live() if start < 0x0300 else {}
         return [live.get(a, self.regs.get(a, 0)) if start < 0x0300 else self.regs.get(a, 0)
