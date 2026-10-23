@@ -94,12 +94,14 @@ Logs: `journalctl -u ray-vault -f`. Backup while running: `sqlite3 /var/lib/ray-
 
 Settings are defined once in the profile (`ray_vault/inverter/profiles/hf.py`) and the dashboard builds its
 forms from them. HF2430 controls: output and charger priority; total, mains and PV charge current limits;
-stop-charging current and boost time; charge/discharge cut-off SOC; and the battery protection voltages
-(over-voltage, charge limit, boost, float, over-discharge and its return, discharge limit, switch-to-mains voltage).
+stop-charging current and boost time; charge/discharge cut-off SOC; the battery protection voltages
+(over-voltage, charge limit, boost, float, over-discharge and its return, discharge limit); and the SBU switching
+pair: `Switch to mains below` (E01B) and `Switch back to battery above` (E022). The pair must satisfy
+switch-to-mains < switch-back ≤ charge limit, so the inverter can't flap between sources or get stuck on mains.
 
-The HF series has **no time-of-use charge/discharge slots** and switches to mains by battery **voltage**
-(`Switch to mains below`) rather than by SOC; those registers exist only on SRNE hybrid models. A profile for
-another model can add them.
+The HF series has **no time-of-use charge/discharge slots** and switches between mains and battery by battery
+**voltage** rather than by SOC; SOC-based switching exists only on SRNE hybrid models. A profile for another model
+can add those registers.
 
 A write is refused, and nothing is sent to the inverter, unless all of these pass:
 
@@ -137,7 +139,7 @@ Interactive docs at `/docs`. Bad parameters return `400 {"error": "..."}`.
 
 | Endpoint | |
 |---|---|
-| `GET /api/overview` | SOC, solar/load/grid/battery power, both link states (used by the widgets) |
+| `GET /api/overview` | SOC, solar/load/grid/battery power, inverter state and priorities, both links (used by the widgets) |
 | `GET /api/health` | `status` is `degraded` if any enabled device is stale or the DB isn't writable |
 | `GET /api/system` | Pi health (CPU temp, under-voltage, CPU, memory, storage, WiFi) and both links |
 | `GET /api/events?limit&from&to&source` | Newest first; `source` = `bms`, `inverter` or `system` |
@@ -150,12 +152,23 @@ Interactive docs at `/docs`. Bad parameters return `400 {"error": "..."}`.
 
 ## Widgets
 
-**iPhone (Scriptable):** [widgets/scriptable-jkbms.js](widgets/scriptable-jkbms.js). Paste it into a new Scriptable
-script, add a Scriptable widget and set its *Parameter* to your dashboard URL. The medium size also shows solar and load.
+Both widgets read `/api/overview` (one small request) and keep showing the last values, marked offline, when the
+Pi can't be reached.
 
-**Mac menu bar (SwiftBar):** [widgets/swiftbar/jkbms.10s.sh](widgets/swiftbar/jkbms.10s.sh) shows SOC and battery
-power in the menu bar; the dropdown has cells, temperatures, solar/load/grid and the inverter state. Needs only
-`curl` and `jq` (built into macOS 15+). Edit `JKBMS_URL` at the top; the `10s` in the filename is the refresh interval.
+**iPhone (Scriptable):** [widgets/scriptable-jkbms.js](widgets/scriptable-jkbms.js). Paste it into a new Scriptable
+script, add a Scriptable widget and set its *Parameter* to your dashboard URL.
+
+| Size | Shows |
+|---|---|
+| Small | SOC with bar, battery flow, solar and load, status |
+| Medium | Same, plus solar, load, grid voltage, inverter state and output priority, pack voltage/current |
+| Lock screen (rectangular / circular) | SOC and battery flow, solar and load, inverter state / SOC only |
+
+**Mac menu bar (SwiftBar):** [widgets/swiftbar/jkbms.10s.sh](widgets/swiftbar/jkbms.10s.sh). The menu bar shows SOC,
+battery power and, while the panels produce, solar power (`SHOW_SOLAR=0` hides it). The dropdown lists battery,
+solar, load, grid, the inverter state and both priorities, a *Battery details* submenu (cells, temperatures,
+switches) and both links, with shortcuts to the dashboard and the inverter settings. Needs only `curl` and `jq`
+(built into macOS 15+). Set `RAYVAULT_URL` at the top; the `10s` in the filename is the refresh interval.
 
 ## Notes
 

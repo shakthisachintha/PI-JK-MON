@@ -43,6 +43,11 @@ class Block:
     def addresses(self) -> range:
         return range(self.start, self.start + self.count)
 
+    def chunks(self, size: int) -> list[Block]:
+        return [
+            Block(a, min(size, self.start + self.count - a)) for a in range(self.start, self.start + self.count, size)
+        ]
+
 
 @dataclass(frozen=True)
 class SettingSpec:
@@ -137,6 +142,7 @@ class Profile:
     machine_states: dict[int, str] = field(default_factory=dict)
     system_voltage_register: int | None = None
     ordering: tuple[tuple[str, str, str], ...] = ()  # (a, "<=" | "<", b) constraints between settings
+    max_read: int = 32  # registers per read request the firmware accepts (SRNE HF: 12)
 
     def setting(self, key: str) -> SettingSpec:
         for s in self.settings:

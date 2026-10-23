@@ -157,6 +157,24 @@ class Controller:
                 f"({limits.cell_uvp:.3f} V/cell) plus {BMS_MARGIN_V * 1000:.0f} mV. Min allowed: {floor:.2f} V."
             )
 
+    def _hint(self, spec: SettingSpec, e: Exception) -> str:
+        code = getattr(e, "code", None)
+        if code in (7, 11) and spec.battery_scaled:
+            try:
+                bt_spec = self.driver.profile.setting("battery_type")
+            except KeyError:
+                return ""
+            bt = self.driver.setting_value(bt_spec)
+            label = dict(bt_spec.options).get(bt, f"type {bt}") if bt is not None else "unknown"
+            if bt != 0:
+                return (
+                    f". The battery type is {label}: SRNE inverters normally only accept battery voltage changes "
+                    "when the battery type is User defined (USE)."
+                )
+        if code == 9:
+            return ". Unlock the inverter's user password on its keypad, or clear it, and try again."
+        return ""
+
     async def apply(self, key: str, value, *, pin: str | None, client: str, confirm: bool = False) -> dict:
         self.guard.check(client, pin)
         d = self.driver
@@ -185,7 +203,7 @@ class Controller:
             readback = await d.write_verified(spec, reg_value)
         except BusError as e:
             d.writer.event("inverter", "inverter_setting_failed", f"{key}: {old} -> {display}: {e} (by {client})")
-            raise ControlError(f"writing {spec.label} failed: {e}", 502) from e
+            raise ControlError(f"writing {spec.label} failed: {e}{self._hint(spec, e)}", 502) from e
         new = spec.to_display(spec.from_raw(readback), sv) if spec.battery_scaled else spec.from_raw(readback)
         d.writer.event("inverter", "inverter_setting", f"{key}: {old} -> {new} (by {client})")
         log.info("control: %s set %s %s -> %s", client, key, old, new)

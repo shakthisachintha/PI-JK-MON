@@ -14,6 +14,26 @@ from .routes_inverter import inverter_current
 EVENT_SOURCES = ("bms", "inverter", "system")
 
 
+PRIORITY_KEYS = ("output_priority", "charge_priority")
+
+
+def priorities(ctx: AppContext) -> dict:
+    """Current inverter priorities as {key: {value, label}} (empty if unknown)."""
+    d = ctx.inverter
+    out: dict = {}
+    if d is None or d.state.settings_ts is None:
+        return out
+    for key in PRIORITY_KEYS:
+        try:
+            spec = d.profile.setting(key)
+        except KeyError:
+            continue
+        value = d.setting_value(spec)
+        if value is not None:
+            out[key] = {"value": value, "label": dict(spec.options).get(value, str(value))}
+    return out
+
+
 def make_router(ctx: AppContext) -> APIRouter:
     r = APIRouter(prefix="/api", tags=["system"])
 
@@ -102,6 +122,7 @@ def make_router(ctx: AppContext) -> APIRouter:
             "grid_voltage": grid_v,
             "grid_power": round(grid_v * grid_a) if grid_v is not None and grid_a is not None else None,
             "machine_state": i.get("machine_state_label"),
+            "priorities": priorities(ctx),
             "bms": {k: b[k] for k in ("link", "stale", "age_s", "soc", "voltage", "current", "power", "rssi")},
             "inverter": {
                 "link": i["link"],

@@ -104,9 +104,11 @@ def test_driver_polls_live_settings_and_info(tmp_path):
     snap = env.inverter.settings_snapshot()
     assert snap["output_priority"] == 2 and snap["charge_limit_voltage"] == 28.8
     assert snap["charge_cutoff_soc"] == 100 and snap["discharge_cutoff_soc"] == 15
-    # the fake rejects 0x0208-0x020B, so the 0x0200 block is read as the runs around them
+    # reads are chunked to the HF limit of 12 registers
+    assert max(env.inverter.bus.reads) <= 12
+    # the fake rejects 0x0208-0x020B, so the chunk containing them is read as the run before them
     plan = next(p for b, p in env.inverter._plans.items() if b.start == 0x0200)
-    assert [(r.start, r.count) for r in plan] == [(0x0200, 8), (0x020C, 0x19)]
+    assert [(r.start, r.count) for r in plan] == [(0x0200, 8)]
     assert env.inverter.sample(st.live_ts)[0] == st.live_ts
     types = [e["type"] for e in env.store.events(source="inverter")]
     assert "inverter_connected" in types
@@ -302,6 +304,8 @@ def test_settings_schema_and_overview(tmp_path):
     ov = env.client.get("/api/overview").json()
     assert ov["soc_source"] == "inverter"  # BMS has no fresh cells in this test
     assert ov["inverter"]["link"] == "connected" and "load_power" in ov
+    assert ov["priorities"]["output_priority"] == {"value": 2, "label": "Solar → battery → mains (SBU)"}
+    assert ov["priorities"]["charge_priority"]["value"] == 0
     hist = env.client.get("/api/inverter/history").json()
     assert hist["fields"] == ["pv_power", "load_power", "battery_power", "soc"]
     env.store.close()
@@ -312,8 +316,8 @@ def test_runs():
     assert runs(list(range(40)), max_count=32) == [Block(0, 32), Block(32, 8)]
 
 
-def test_bus_maps_srne_gateway_exception_to_rejection():
-    """SRNE answers unreadable blocks with Modbus exception 10; that must trigger the block fallback."""
+def test_bus_translates_srne_exception_codes():
+    """SRNE reuses Modbus exception codes with its own meanings (10 = length error, 11 = permission denied)."""
     import minimalmodbus
 
     bus = ModbusBus("/dev/null")
@@ -325,15 +329,19 @@ def test_bus_maps_srne_gateway_exception_to_rejection():
         def read_registers(self, *a):
             raise self.exc
 
-    for exc, expected in (
-        (minimalmodbus.SlaveReportedException("Slave reported gateway path unavailable"), IllegalAddress),
-        (minimalmodbus.IllegalRequestError("Slave reported illegal data address"), IllegalAddress),
-        (minimalmodbus.SlaveDeviceBusyError("Slave reported device busy"), NoResponse),
-        (minimalmodbus.NoResponseError("No communication"), NoResponse),
-    ):
+    for exc, expected, code, text in (
+        (minimalmodbus.SlaveReportedException("Slave reported gateway path unavailable"), IllegalAddress, 10, "length"),
+        (minimalmodbus.SlaveReportedException("Slave reported gateway target device failed to respond"),
+         IllegalAddress, 11, "permission denied"),
+        (minimalmodbus.IllegalRequestError("Slave reported illegal data address"), IllegalAddress, 2, "address"),
+        (minimalmodbus.SlaveReportedException("Slave reported error code 9"), IllegalAddress, 9, "password"),
+        (minimalmodbus.SlaveDeviceBusyError("Slave reported device busy"), NoResponse, None, "frame"),
+        (minimalmodbus.NoResponseError("No communication"), NoResponse, None, ""),
+    ):  # fmt: skip
         bus._instrument = Inst(exc)
-        with pytest.raises(expected):
+        with pytest.raises(expected) as e:
             bus._call("read_registers", 0x0200, 37, 3)
+        assert getattr(e.value, "code", None) == code and text in str(e.value)
 
 
 def test_driver_recovers_from_gateway_rejected_blocks(tmp_path):
@@ -362,4 +370,41 @@ def test_driver_skips_registers_that_time_out(tmp_path):
     assert env.inverter.state.link == LINK_CONNECTED
     assert env.inverter.settings_snapshot()["output_priority"] == 2
     assert env.inverter.settings_snapshot()["boost_charge_time"] == 120  # E012, next to the silent ones
+    env.store.close()
+
+
+def test_mains_battery_switching_thresholds(tmp_path):
+    env = make_env(tmp_path)
+    connected(env)
+    bms_8s(env)
+    snap = env.inverter.settings_snapshot()
+    assert (snap["mains_switch_voltage"], snap["battery_return_voltage"]) == (24.0, 26.4)
+    # switching back must stay above the switch-to-mains point, or the inverter would flap
+    r = write(env, "battery_return_voltage", 24.0)
+    assert r.status_code == 400 and "Switch to mains below" in r.json()["error"]
+    # ... and at or below the charge limit, or it would never return to battery
+    assert write(env, "battery_return_voltage", 29.0).status_code == 400
+    # not a protection voltage: no typed confirmation needed
+    r = write(env, "battery_return_voltage", 26.8)
+    assert r.status_code == 200, r.text
+    assert r.json()["new"] == 26.8 and env.inverter.bus.regs[0xE022] == 134
+    env.store.close()
+
+
+def test_permission_denied_on_battery_voltage_explains_battery_type(tmp_path):
+    from ray_vault.inverter.bus import Refused
+
+    env = make_env(tmp_path)
+    connected(env)
+    bms_8s(env)
+    bus = env.inverter.bus
+
+    async def refuse(address, raw):
+        raise Refused(11, "Slave reported gateway target device failed to respond")
+
+    bus.write_register = refuse
+    r = write(env, "boost_return_voltage", 26.2, confirm=True)
+    err = r.json()["error"]
+    assert r.status_code == 502
+    assert "permission denied (code 11)" in err and "Lithium iron phosphate (LFP)" in err and "USE" in err
     env.store.close()

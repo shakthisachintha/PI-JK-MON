@@ -232,6 +232,7 @@ export interface Overview {
   grid_voltage: number | null;
   grid_power: number | null;
   machine_state: string | null;
+  priorities: Partial<Record<"output_priority" | "charge_priority", { value: number; label: string }>>;
   bms: {
     link: LinkStatus | "disabled";
     stale: boolean;

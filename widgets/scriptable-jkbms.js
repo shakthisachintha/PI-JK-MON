@@ -1,15 +1,15 @@
-// JK BMS widget for Scriptable (iOS). Shows SOC, power, voltage, current, cell spread and link status.
+// Ray Vault widget for Scriptable (iOS): battery SOC and flow, solar, load, grid and inverter status.
 //
 // Setup:
 //   1. Install "Scriptable" from the App Store, create a new script and paste this file into it.
 //   2. Add a Scriptable widget (small, medium, or lock-screen rectangular/circular) to your screen.
 //   3. Long-press the widget → Edit Widget → Script: this script.
-//      Parameter: your dashboard URL, e.g. http://raspberrypi.local:8080 (or set DEFAULT_URL below).
+//      Parameter: your dashboard URL, e.g. http://raspberryss.local:8080 (or set DEFAULT_URL below).
 //   Tapping the widget opens the dashboard.
 
 const DEFAULT_URL = "http://raspberryss.local:8080";
 const BASE = ((args.widgetParameter || DEFAULT_URL) + "").trim().replace(/\/+$/, "");
-const CACHE = "jkbms-widget-cache.json";
+const CACHE = "ray-vault-widget-cache.json";
 
 const C = {
   bg: Color.dynamic(new Color("#ffffff"), new Color("#141a21")),
@@ -21,6 +21,7 @@ const C = {
   bad: Color.dynamic(new Color("#dc2626"), new Color("#f87171")),
   charge: Color.dynamic(new Color("#16a34a"), new Color("#22c55e")),
   discharge: Color.dynamic(new Color("#ea580c"), new Color("#fb923c")),
+  solar: Color.dynamic(new Color("#ca8a04"), new Color("#facc15")),
 };
 
 // --- data ---------------------------------------------------------------------
@@ -28,66 +29,64 @@ const C = {
 const fm = FileManager.local();
 const cachePath = fm.joinPath(fm.cacheDirectory(), CACHE);
 
-// Solar / load from the combined overview (Ray Vault 2+); optional, null if unavailable.
-async function loadOverview() {
-  try {
-    const req = new Request(`${BASE}/api/overview`);
-    req.timeoutInterval = 5;
-    const ov = await req.loadJSON();
-    return req.response.statusCode === 200 && ov.inverter && ov.inverter.link !== "disabled" ? ov : null;
-  } catch (e) {
-    return null;
-  }
-}
-
 async function load() {
   try {
-    const req = new Request(`${BASE}/api/current`);
+    const req = new Request(`${BASE}/api/overview`);
     req.timeoutInterval = 8;
-    const data = await req.loadJSON();
-    if (req.response.statusCode !== 200) throw new Error(`HTTP ${req.response.statusCode}`);
-    const ov = await loadOverview();
-    fm.writeString(cachePath, JSON.stringify({ fetched: Date.now(), data, ov }));
-    return { data, ov, fetched: Date.now(), offline: false };
+    const o = await req.loadJSON();
+    if (req.response.statusCode !== 200 || !o.bms) throw new Error(`HTTP ${req.response.statusCode}`);
+    const r = { o, fetched: Date.now(), offline: false };
+    fm.writeString(cachePath, JSON.stringify(r));
+    return r;
   } catch (e) {
     // Away from home WiFi (or Pi down): show the last values we saw.
-    if (fm.fileExists(cachePath)) {
-      const cached = JSON.parse(fm.readString(cachePath));
-      return { ...cached, offline: true };
-    }
-    return { data: null, fetched: null, offline: true, error: String(e) };
+    if (fm.fileExists(cachePath)) return { ...JSON.parse(fm.readString(cachePath)), offline: true };
+    return { o: null, fetched: null, offline: true };
   }
 }
 
 // --- helpers ------------------------------------------------------------------
 
-const fmt = (v, d = 1) => (v === null || v === undefined ? "–" : Number(v).toFixed(d));
+function fmtPower(w, signed = false) {
+  if (w === null || w === undefined) return "–";
+  const s = Math.abs(w) >= 1000 ? `${(Math.abs(w) / 1000).toFixed(2)} kW` : `${Math.round(Math.abs(w))} W`;
+  return signed && Math.round(w) !== 0 ? `${w > 0 ? "+" : "−"}${s}` : s;
+}
+
+function flow(o) {
+  const w = o?.battery_power;
+  if (w === null || w === undefined || Math.abs(w) < 10) return { label: "idle", color: C.muted };
+  return w > 0 ? { label: "charging", color: C.charge } : { label: "discharging", color: C.discharge };
+}
 
 function socColor(soc) {
   if (soc === null || soc === undefined) return C.muted;
   return soc < 10 ? C.bad : soc < 25 ? C.warn : C.ok;
 }
 
-function flowColor(a) {
-  if (a === null || a === undefined || Math.abs(a) < 0.05) return C.muted;
-  return a > 0 ? C.charge : C.discharge;
+/** "Solar → battery → mains (SBU)" -> "SBU" */
+function shortLabel(label) {
+  const m = /\(([^)]+)\)\s*$/.exec(label || "");
+  return m ? m[1] : label || "";
 }
 
-function fmtPower(w) {
-  if (w === null || w === undefined) return "–";
-  return Math.abs(w) >= 1000 ? `${(w / 1000).toFixed(2)} kW` : `${Math.round(w)} W`;
+function hasInverter(o) {
+  return o && o.inverter && o.inverter.link !== "disabled";
 }
 
 function statusLine(r) {
-  const d = r.data;
-  if (!d) return { text: "No data", color: C.bad };
+  const o = r.o;
+  if (!o) return { text: "No data", color: C.bad };
   if (r.offline) {
     const age = r.fetched ? Math.round((Date.now() - r.fetched) / 60000) : null;
     return { text: age === null ? "Offline" : `Offline · ${age} min old`, color: C.warn };
   }
-  if (d.link !== "connected") return { text: `BMS ${d.link}`, color: C.warn };
-  if (d.stale) return { text: "Stale data", color: C.warn };
-  const t = new Date(d.ts);
+  if (o.inverter?.fault_codes?.length) return { text: `Inverter fault ${o.inverter.fault_codes.join(", ")}`, color: C.bad };
+  if (o.bms.link !== "connected") return { text: `BMS ${o.bms.link}`, color: C.warn };
+  if (o.bms.stale) return { text: "BMS data stale", color: C.warn };
+  if (hasInverter(o) && o.inverter.link !== "connected")
+    return { text: `Inverter ${o.inverter.link.replace("_", " ")}`, color: C.warn };
+  const t = new Date(o.ts);
   return { text: `${t.getHours()}:${String(t.getMinutes()).padStart(2, "0")}`, color: C.muted };
 }
 
@@ -123,72 +122,105 @@ function text(stack, s, size, color, weight = "regular") {
   return t;
 }
 
+function icon(stack, name, size, color) {
+  const sym = SFSymbol.named(name);
+  if (!sym) return;
+  sym.applyFont(Font.semiboldSystemFont(size));
+  const img = stack.addImage(sym.image);
+  img.imageSize = new Size(size + 2, size + 2);
+  img.tintColor = color;
+}
+
+/** A row like "☀ 402 W" (icon + value). */
+function iconValue(stack, name, value, color, size = 12) {
+  const row = stack.addStack();
+  row.centerAlignContent();
+  row.spacing = 3;
+  icon(row, name, size - 1, color);
+  text(row, value, size, C.text, "semibold");
+  return row;
+}
+
 // --- layouts ------------------------------------------------------------------
 
-function small(w, r) {
-  const d = r.data || {};
-  text(w, "BATTERY", 11, C.muted, "semibold");
+function socBlock(w, o, big = 40) {
+  text(w, "RAY VAULT", 11, C.muted, "semibold");
   w.addSpacer(2);
   const soc = w.addStack();
   soc.bottomAlignContent();
-  text(soc, d.soc === null || d.soc === undefined ? "–" : String(d.soc), 40, C.text, "bold");
+  text(soc, o?.soc === null || o?.soc === undefined ? "–" : String(o.soc), big, C.text, "bold");
   text(soc, " %", 16, C.muted, "semibold");
   w.addSpacer(4);
-  w.addImage(bar(120, 8, (d.soc ?? 0) / 100, socColor(d.soc)));
+  w.addImage(bar(120, 8, (o?.soc ?? 0) / 100, socColor(o?.soc)));
   w.addSpacer(6);
-  text(w, fmtPower(d.power), 15, flowColor(d.current), "semibold");
-  text(w, `${fmt(d.voltage, 2)} V · ${fmt(d.current, 1)} A`, 11, C.muted);
+  const f = flow(o);
+  text(w, `${fmtPower(o?.battery_power, true)} ${f.label}`, 13, f.color, "semibold");
+}
+
+function small(w, r) {
+  const o = r.o;
+  socBlock(w, o);
+  if (hasInverter(o)) {
+    w.addSpacer(4);
+    const row = w.addStack();
+    row.centerAlignContent();
+    iconValue(row, "sun.max.fill", fmtPower(o.pv_power), C.solar, 11);
+    row.addSpacer(8);
+    iconValue(row, "house.fill", fmtPower(o.load_power), C.muted, 11);
+  }
   w.addSpacer();
   const s = statusLine(r);
   text(w, s.text, 10, s.color);
 }
 
 function medium(w, r) {
-  const d = r.data || {};
+  const o = r.o;
   const row = w.addStack();
-  row.centerAlignContent();
 
   const left = row.addStack();
   left.layoutVertically();
-  small(left, r);
+  socBlock(left, o);
+  left.addSpacer();
+  const s = statusLine(r);
+  text(left, s.text, 10, s.color);
 
   row.addSpacer(16);
 
   const right = row.addStack();
   right.layoutVertically();
-  const kv = (k, v, color = C.text) => {
+  const kv = (name, k, v, color = C.text, tint = C.muted) => {
     const line = right.addStack();
+    line.centerAlignContent();
+    icon(line, name, 11, tint);
+    line.addSpacer(5);
     text(line, k, 12, C.muted);
     line.addSpacer();
     text(line, v, 12, color, "semibold");
-    right.addSpacer(3);
+    right.addSpacer(4);
   };
-  const ov = r.ov;
-  if (ov) {
-    kv("Solar", fmtPower(ov.pv_power), ov.pv_power > 0 ? C.charge : C.text);
-    kv("Load", fmtPower(ov.load_power));
+  if (hasInverter(o)) {
+    kv("sun.max.fill", "Solar", fmtPower(o.pv_power), o.pv_power > 0 ? C.text : C.muted, C.solar);
+    kv("house.fill", "Load", fmtPower(o.load_power));
+    kv("powerplug.fill", "Grid", o.grid_voltage == null ? "–" : `${Math.round(o.grid_voltage)} V`);
+    const prio = o.priorities?.output_priority;
+    kv("bolt.fill", "Inverter", `${o.machine_state ?? "–"}${prio ? ` · ${shortLabel(prio.label)}` : ""}`);
   }
-  kv("Remaining", `${fmt(d.capacity_remain, 0)} / ${fmt(d.nominal_capacity, 0)} Ah`);
-  kv("Cell spread", d.delta_cell_voltage == null ? "–" : `${Math.round(d.delta_cell_voltage * 1000)} mV`);
-  if (!ov) {
-    kv("Cells", `${fmt(d.min_cell_voltage, 3)}–${fmt(d.max_cell_voltage, 3)}`);
-    kv("Temp", `${fmt(d.temp_t1)}° / ${fmt(d.temp_mos)}°`);
-  }
-  const sw = (on) => (on ? "on" : "off");
-  kv("Chg / Dis", `${sw(d.charge_on)} / ${sw(d.discharge_on)}`, d.charge_on && d.discharge_on ? C.ok : C.warn);
+  const b = o?.bms;
+  kv("battery.75percent", "Pack", b?.voltage == null ? "–" : `${b.voltage.toFixed(2)} V · ${b.current.toFixed(1)} A`);
 }
 
 function lockRect(w, r) {
-  const d = r.data || {};
-  text(w, `🔋 ${d.soc ?? "–"}%  ${fmtPower(d.power)}`, 14, Color.white(), "semibold");
-  text(w, `${fmt(d.voltage, 2)} V  ${fmt(d.current, 1)} A`, 12, Color.white());
-  text(w, r.offline ? "offline" : d.stale ? "stale" : `Δ ${d.delta_cell_voltage == null ? "–" : Math.round(d.delta_cell_voltage * 1000)} mV`, 11, Color.white());
+  const o = r.o;
+  const white = Color.white();
+  text(w, `🔋 ${o?.soc ?? "–"}%  ${fmtPower(o?.battery_power, true)}`, 14, white, "semibold");
+  if (hasInverter(o)) text(w, `☀︎ ${fmtPower(o.pv_power)}   ⌂ ${fmtPower(o.load_power)}`, 12, white);
+  const s = statusLine(r);
+  text(w, r.offline || s.color !== C.muted ? s.text : o?.machine_state ?? s.text, 11, white);
 }
 
 function lockCircle(w, r) {
-  const d = r.data || {};
   w.addSpacer();
-  const t = text(w, `${d.soc ?? "–"}%`, 16, Color.white(), "bold");
+  const t = text(w, `${r.o?.soc ?? "–"}%`, 16, Color.white(), "bold");
   t.centerAlignText();
   w.addSpacer();
 }
@@ -197,7 +229,7 @@ function lockCircle(w, r) {
 
 const r = await load();
 const w = new ListWidget();
-w.url = BASE;
+w.url = BASE + "/";
 w.refreshAfterDate = new Date(Date.now() + 5 * 60 * 1000); // iOS treats this as a hint
 
 const family = config.widgetFamily || "medium";

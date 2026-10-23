@@ -10,6 +10,7 @@ from __future__ import annotations
 from ..registers import Block, Profile, Reading, SettingSpec
 
 BATTERY_VOLTAGES = "Battery voltages"
+SWITCHING = "Mains ↔ battery switching (SBU)"
 
 READINGS = (
     Reading("soc", 0x0100, unit="%", label="Battery SOC"),
@@ -119,13 +120,27 @@ SETTINGS = (
             ("under_voltage_warning", "Low-voltage warning", 0xE00C, False, "Alarm only; the load stays on."),
             ("over_discharge_voltage", "Over-discharge voltage", 0xE00D, False, "Alarm and load cut-off."),
             ("discharge_limit_voltage", "Discharge limit voltage", 0xE00E, False, "Load is cut off immediately."),
-            ("mains_switch_voltage", "Switch to mains below", 0xE01B, False,
-             "In SBU mode, the load moves to mains when the battery drops below this."),
         )
+    ),
+    # --- SBU switching between mains and battery (12 V-normalised) ---
+    SettingSpec(
+        "mains_switch_voltage", "Switch to mains below", SWITCHING, 0xE01B, scale=0.1, unit="V",
+        min=9.0, max=15.5, step=0.1, battery_scaled=True, danger=True, discharge_side=True,
+        description="In SBU mode, the load moves to mains when the battery drops below this.",
+    ),
+    SettingSpec(
+        "battery_return_voltage", "Switch back to battery above", SWITCHING, 0xE022, scale=0.1, unit="V",
+        min=9.0, max=15.5, step=0.1, battery_scaled=True,
+        description="Once on mains, the load returns to the battery/inverter when the battery rises above this.",
     ),
     # --- read-only context ---
     SettingSpec("system_voltage", "System voltage", "Battery", 0xE003, unit="V", writable=False),
-    SettingSpec("battery_type", "Battery type (raw)", "Battery", 0xE004, writable=False),
+    SettingSpec(
+        "battery_type", "Battery type", "Battery", 0xE004, kind="enum", writable=False,
+        options=((0, "User defined (USE)"), (1, "Sealed lead-acid (SLD)"), (2, "Flooded lead-acid (FLD)"),
+                 (3, "Gel (GEL)"), (4, "Lithium iron phosphate (LFP)"), (5, "Ternary lithium (NCA)")),
+        description="Battery voltages can usually only be changed on the inverter when this is USE.",
+    ),
     SettingSpec("battery_capacity", "Nominal capacity", "Battery", 0xE002, unit="Ah", writable=False),
 )  # fmt: skip
 
@@ -133,18 +148,21 @@ PROFILE = Profile(
     name="hf",
     title="SRNE HF series (HF2430)",
     live_blocks=(Block(0x0100, 0x10), Block(0x0200, 0x25)),
-    settings_blocks=(Block(0xE000, 0x1D), Block(0xE200, 0x10)),
+    settings_blocks=(Block(0xE000, 0x23), Block(0xE200, 0x10)),
     info_blocks=(Block(0x000A, 0x17), Block(0x0035, 0x14)),
     readings=READINGS,
     settings=SETTINGS,
     machine_states=MACHINE_STATES,
     system_voltage_register=0xE003,
+    max_read=12,  # HF firmware answers longer reads with SRNE error 0x0A "length error"
     ordering=(
         ("float_voltage", "<=", "boost_voltage"),
         ("boost_voltage", "<=", "charge_limit_voltage"),
         ("charge_limit_voltage", "<=", "over_voltage"),
         ("discharge_limit_voltage", "<=", "over_discharge_voltage"),
         ("over_discharge_voltage", "<", "over_discharge_return_voltage"),
+        ("mains_switch_voltage", "<", "battery_return_voltage"),
+        ("battery_return_voltage", "<=", "charge_limit_voltage"),
     ),
 )
 

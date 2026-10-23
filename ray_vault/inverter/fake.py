@@ -11,7 +11,7 @@ import math
 import random
 import time
 
-from .bus import IllegalAddress, NoResponse, PortError
+from .bus import IllegalAddress, NoResponse, PortError, Refused
 
 DAY_S = 86_400
 
@@ -38,6 +38,7 @@ FAKE_SETTINGS = {
     0xE013: 30,
     0xE01B: 120,  # switch to mains 12.0 -> 24.0 V
     0xE01C: 20,
+    0xE022: 132,  # switch back to battery 13.2 -> 26.4 V
     0xE204: 2,  # SBU
     0xE205: 100,  # mains charge 10.0 A
     0xE20A: 400,  # max charge 40.0 A
@@ -131,6 +132,8 @@ class FakeBus:
         self.regs.update(_ascii_regs("FAKE0000000000000001", 0x0035, 0x14, low_only=True))
         self.illegal: set[int] = {0x0208, 0x0209, 0x020A, 0x020B}  # "reserved" registers some units reject
         self.silent: set[int] = set()  # tests: registers that time out instead of being rejected
+        self.max_read = 12  # registers per read, as on the real HF2430
+        self.reads: list[int] = []  # tests: sizes of block reads
         self.fail_next = 0  # tests: make the next N calls raise NoResponse
         self.port_missing = False  # tests: simulate an unplugged adapter
         self.writes: list[tuple[int, int]] = []
@@ -201,6 +204,9 @@ class FakeBus:
     async def read_block(self, start: int, count: int) -> list[int]:
         await asyncio.sleep(0)
         self._check()
+        self.reads.append(count)
+        if count > self.max_read:
+            raise Refused(10, "length error")  # like the HF firmware
         if any(a in self.illegal or a in self.silent for a in range(start, start + count)):
             raise IllegalAddress(f"block 0x{start:04X}+{count}")
         live = self._live() if start < 0x0300 else {}

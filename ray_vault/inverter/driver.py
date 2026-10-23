@@ -236,7 +236,8 @@ class InverterDriver:
         the block is read as the contiguous runs of registers that answered.
         """
         regs: dict[int, int] = {}
-        for b in blocks:
+        size = self.profile.max_read
+        for b in (c for blk in blocks for c in blk.chunks(size)):
             plan = self._plans.get(b)
             if plan is None:
                 try:
@@ -284,7 +285,7 @@ class InverterDriver:
                         log.info("register 0x%04X doesn't answer; skipping it", a)
                         if timeouts >= DISCOVERY_MAX_TIMEOUTS:
                             raise
-        return runs(readable)
+        return runs(readable, self.profile.max_read)
 
     async def _read_info(self) -> None:
         regs = await self._read_blocks(self.profile.info_blocks)
