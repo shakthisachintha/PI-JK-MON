@@ -180,7 +180,7 @@ def test_pin_guard_lockout():
 def test_validate_value():
     s = hf.PROFILE.setting("max_charge_current")
     assert validate_value(s, 40) == 40
-    for bad in (85, 42, -5, True, "40"):
+    for bad in (85, 42.5, -5, True, "40"):
         with pytest.raises(ControlError):
             validate_value(s, bad)
     e = hf.PROFILE.setting("output_priority")
@@ -220,19 +220,55 @@ def test_write_rejections_send_nothing(tmp_path):
     assert write(env, "output_priority", 1, pin=None).status_code == 401
     assert write(env, "output_priority", 1, pin="0000").status_code == 401
     assert write(env, "output_priority", 7).status_code == 400
-    assert write(env, "max_charge_current", 42).status_code == 400  # step 5
+    assert write(env, "max_charge_current", 42.5).status_code == 400  # step 1 A
     assert write(env, "system_voltage", 48).status_code == 400  # read-only
     assert write(env, "nope", 1).status_code == 404
     assert env.inverter.bus.writes == []
     env.store.close()
 
 
-def test_packed_soc_write_preserves_other_half(tmp_path):
+def test_soc_settings_use_their_own_registers(tmp_path):
     env = make_env(tmp_path)
     connected(env)
     r = write(env, "discharge_cutoff_soc", 20)
     assert r.status_code == 200, r.text
-    assert env.inverter.bus.regs[0xE00F] == (100 << 8) | 20
+    assert env.inverter.bus.regs[0xE00F] == 20  # whole register, as manual [59] / protocol V1.7+
+    assert write(env, "charge_cutoff_soc", 95).status_code == 200
+    assert env.inverter.bus.regs[0xE01D] == 95
+    # switch-back SOC must stay above the switch-to-mains SOC
+    r = write(env, "battery_return_soc", 10)
+    assert r.status_code == 400 and "[61]" in r.json()["error"] and "[62]" in r.json()["error"]
+    env.store.close()
+
+
+def test_old_packed_soc_layout_blocks_soc_writes(tmp_path):
+    env = make_env(tmp_path)
+    env.inverter.bus.regs[0xE00F] = (100 << 8) | 15  # register sheet V1.3: charge | discharge cut-off packed
+    connected(env)
+    r = write(env, "discharge_cutoff_soc", 20)
+    assert r.status_code == 409 and "keypad" in r.json()["error"]
+    assert env.inverter.bus.regs[0xE00F] == (100 << 8) | 15
+    items = {i["key"]: i for g in env.client.get("/api/inverter/settings").json()["groups"] for i in g["settings"]}
+    assert items["mains_switch_soc"]["writable"] is False and items["mains_switch_soc"]["unavailable"]
+    assert items["output_priority"]["writable"] is True and "unavailable" not in items["output_priority"]
+    env.store.close()
+
+
+def test_settings_map_one_to_one_to_keypad_numbers(tmp_path):
+    numbers = [s.keypad for s in hf.SETTINGS if s.keypad is not None]
+    assert len(numbers) == len(set(numbers))  # no keypad number used twice
+    keypad_only = [n for n, _, _ in hf.PROFILE.keypad_only]
+    assert not set(numbers) & set(keypad_only)
+    # every setup item in the manual (section 4.2) is either mapped or listed as keypad-only
+    manual = set(range(1, 30)) | {32, 33, 34, 35, 37, 38, 40} | set(range(57, 63))
+    assert set(numbers) | set(keypad_only) == manual
+    assert all(s.description for s in hf.SETTINGS)
+    env = make_env(tmp_path)
+    connected(env)
+    body = env.client.get("/api/inverter/settings").json()
+    items = {i["key"]: i for g in body["groups"] for i in g["settings"]}
+    assert items["mains_switch_voltage"]["keypad"] == 4 and items["over_voltage"]["keypad"] is None
+    assert {k["keypad"] for k in body["keypad_only"]} == set(keypad_only)
     env.store.close()
 
 
@@ -268,8 +304,8 @@ def test_readback_mismatch_is_an_error(tmp_path):
     bus = env.inverter.bus
     real_write = bus.write_register
 
-    async def ignoring_write(address, raw):
-        await real_write(address, raw)
+    async def ignoring_write(address, raw, function=16):
+        await real_write(address, raw, function)
         bus.regs[address] = 0  # the inverter "didn't take it"
 
     bus.write_register = ignoring_write
@@ -297,7 +333,7 @@ def test_settings_schema_and_overview(tmp_path):
     assert body["writable"] and body["connected"] and body["system_voltage"] == 24
     assert body["bms_limits"] == {"cell_count": 8, "cell_ovp": 3.65, "cell_uvp": 2.8}
     groups = {g["name"]: {s["key"]: s for s in g["settings"]} for g in body["groups"]}
-    assert groups["Priorities"]["output_priority"]["options"][2]["label"].startswith("Solar → battery")
+    assert groups["Output & priorities"]["output_priority"]["options"][2]["label"].startswith("Solar → battery")
     assert groups["Battery voltages"]["charge_limit_voltage"]["value"] == 28.8
     cur = env.client.get("/api/inverter/current").json()
     assert cur["link"] == "connected" and cur["pv_power"] is not None
@@ -381,7 +417,7 @@ def test_mains_battery_switching_thresholds(tmp_path):
     assert (snap["mains_switch_voltage"], snap["battery_return_voltage"]) == (24.0, 26.4)
     # switching back must stay above the switch-to-mains point, or the inverter would flap
     r = write(env, "battery_return_voltage", 24.0)
-    assert r.status_code == 400 and "Switch to mains below" in r.json()["error"]
+    assert r.status_code == 400 and "Battery → mains voltage [04]" in r.json()["error"]
     # ... and at or below the charge limit, or it would never return to battery
     assert write(env, "battery_return_voltage", 29.0).status_code == 400
     # not a protection voltage: no typed confirmation needed
@@ -391,7 +427,7 @@ def test_mains_battery_switching_thresholds(tmp_path):
     env.store.close()
 
 
-def test_permission_denied_on_battery_voltage_explains_battery_type(tmp_path):
+def test_permission_denied_points_to_the_keypad(tmp_path):
     from ray_vault.inverter.bus import Refused
 
     env = make_env(tmp_path)
@@ -399,12 +435,61 @@ def test_permission_denied_on_battery_voltage_explains_battery_type(tmp_path):
     bms_8s(env)
     bus = env.inverter.bus
 
-    async def refuse(address, raw):
+    async def refuse(address, raw, function=16):
         raise Refused(11, "Slave reported gateway target device failed to respond")
 
     bus.write_register = refuse
-    r = write(env, "boost_return_voltage", 26.2, confirm=True)
+    r = write(env, "battery_return_voltage", 26.8)
     err = r.json()["error"]
     assert r.status_code == 502
-    assert "permission denied (code 11)" in err and "Lithium iron phosphate (LFP)" in err and "USE" in err
+    assert "permission denied (code 11)" in err and "no password entered" in err and "[05]" in err
+    env.store.close()
+
+
+def test_hf_writes_use_function_16_and_fall_back_to_6(tmp_path):
+    env = make_env(tmp_path)
+    connected(env)
+    bus = env.inverter.bus
+    assert write(env, "output_priority", 1).status_code == 200
+    assert bus.functions == [16]  # the HF protocol documents only 03H and 10H
+    bus.write_functions = {6}  # a firmware that only knows write-single
+    assert write(env, "output_priority", 0).status_code == 200
+    assert bus.functions == [16, 6] and bus.regs[0xE204] == 0
+    assert write(env, "output_priority", 2).status_code == 200
+    assert bus.functions == [16, 6, 6]  # remembered
+    env.store.close()
+
+
+def test_unlock_test_finds_a_working_password(tmp_path):
+    from ray_vault.inverter.fake import FakeBus
+    from ray_vault.inverter.unlock import unlock_test
+
+    bus = FakeBus(seed=1)
+    bus.locked, bus.password = {0xE022}, 4321
+    lines: list[str] = []
+    assert asyncio.run(unlock_test(bus, hf, 1111, 0xE022, out=lines.append)) == 1
+    assert any("REFUSED" in ln and "code 5" in ln for ln in lines)
+    lines.clear()
+    assert asyncio.run(unlock_test(bus, hf, 4321, 0xE022, out=lines.append)) == 0
+    assert "user password entered" in "\n".join(lines)
+    assert 0xE202 not in [a for a, _ in bus.writes]  # never sets a keypad password
+    assert bus.regs[0xE022] == 132  # rewritten with its own value
+
+
+def test_configured_password_is_entered_before_writes(tmp_path):
+    env = make_env(tmp_path)
+    connected(env)
+    bms_8s(env)
+    bus = env.inverter.bus
+    bus.locked, bus.password = {0xE022}, 4321
+    r = write(env, "battery_return_voltage", 26.8)
+    assert r.status_code == 502 and "inverter-unlock-test" in r.json()["error"]
+    env.inverter.password = 1111
+    r = write(env, "battery_return_voltage", 26.8)
+    assert r.status_code == 502 and "password in the config is wrong" in r.json()["error"]
+    env.inverter.password = 4321
+    r = write(env, "battery_return_voltage", 26.8)
+    assert r.status_code == 200, r.text
+    assert bus.writes[-2:] == [(0xE203, 4321), (0xE022, 134)]
+    assert env.inverter.state.password_level == 1
     env.store.close()

@@ -9,6 +9,7 @@ Units: a SettingSpec's min/max/step are in *register units* (for 12 V-normalised
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -69,6 +70,7 @@ class SettingSpec:
     danger: bool = False  # wrong values can damage the battery: needs explicit confirmation
     writable: bool = True
     description: str = ""
+    keypad: int | None = None  # parameter number on the inverter's own setup menu (user manual), if any
 
     # --- raw register <-> register units ---
 
@@ -122,6 +124,7 @@ class SettingSpec:
             "danger": self.danger,
             "writable": self.writable,
             "description": self.description,
+            "keypad": self.keypad,
         }
         if self.kind == "enum":
             d["options"] = [{"value": v, "label": lbl} for v, lbl in self.options]
@@ -143,6 +146,14 @@ class Profile:
     system_voltage_register: int | None = None
     ordering: tuple[tuple[str, str, str], ...] = ()  # (a, "<=" | "<", b) constraints between settings
     max_read: int = 32  # registers per read request the firmware accepts (SRNE HF: 12)
+    write_function: int = 6  # Modbus function code for writes: 6 (write single) or 16 (write multiple, N=1)
+    password_status_register: int | None = None  # 0 = no password entered, 1 = user, 4 = manufacturer
+    password_input_register: int | None = None  # write-only; entering a password raises the level above
+
+    # Setup-menu items the inverter offers on its keypad but that have no known register: (number, label, why).
+    keypad_only: tuple[tuple[int, str, str], ...] = ()
+    # regs -> {setting key: reason} for settings whose register meaning doesn't match this unit's firmware.
+    layout_check: Callable[[dict[int, int]], dict[str, str]] | None = None
 
     def setting(self, key: str) -> SettingSpec:
         for s in self.settings:

@@ -90,7 +90,7 @@ def exception_code(message: str) -> int | None:
 class Bus(Protocol):
     async def read_block(self, start: int, count: int) -> list[int]: ...
     async def read_register(self, address: int) -> int: ...
-    async def write_register(self, address: int, raw: int) -> None: ...
+    async def write_register(self, address: int, raw: int, function: int = 16) -> None: ...
     async def reopen(self) -> None: ...
     async def close(self) -> None: ...
 
@@ -168,9 +168,10 @@ class ModbusBus:
     async def read_register(self, address: int) -> int:
         return (await self.read_block(address, 1))[0]
 
-    async def write_register(self, address: int, raw: int) -> None:
-        # Function code 6 (write single register), as SRNE documents; raw is the unsigned register value.
-        await self._run(self._call, "write_register", address, raw, 0, 6, False)
+    async def write_register(self, address: int, raw: int, function: int = 16) -> None:
+        """Write one register; raw is the unsigned value. function 16 (0x10, write multiple with N=1) is what the
+        HF protocol documents; 6 (write single) is accepted by other SRNE families."""
+        await self._run(self._call, "write_register", address, raw, 0, function, False)
 
     async def reopen(self) -> None:
         await self._run(self._close)

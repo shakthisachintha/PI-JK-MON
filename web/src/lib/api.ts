@@ -199,6 +199,10 @@ export interface SettingItem {
   danger: boolean;
   writable: boolean;
   description: string;
+  /** Parameter number in the inverter's keypad setup menu (user manual), or null if Modbus-only. */
+  keypad: number | null;
+  /** Set when this unit's firmware maps the register differently; the setting is then read-only. */
+  unavailable?: string;
   value: number | null;
   options?: { value: number; label: string }[];
   min?: number;
@@ -214,6 +218,7 @@ export interface InverterSettings {
   profile: string;
   bms_limits: { cell_count: number; cell_ovp: number; cell_uvp: number } | null;
   groups: { name: string; settings: SettingItem[] }[];
+  keypad_only: { keypad: number; label: string; reason: string }[];
 }
 
 export interface SettingWriteResult {

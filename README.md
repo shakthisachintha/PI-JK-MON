@@ -79,7 +79,17 @@ to delete once everything works.
 
    The probe is read-only. Compare its output with the inverter's display (priorities, charge currents, battery
    voltages). Registers the inverter rejects are shown as `-`.
-4. Set `[control] pin = "…"` to enable changes, restart, change **output priority** once from the Inverter page
+4. If writes fail with *permission denied (code 11)*, the inverter wants a password entered over Modbus. Test one
+   (service stopped). The test rewrites E022 with its own value and enters the password in E203; it never sets a
+   password (E202):
+
+   ```bash
+   sudo -u rayvault /opt/ray-vault/venv/bin/python -m ray_vault inverter-unlock-test \
+     --config /etc/ray-vault/config.toml --password 1234
+   ```
+
+   If it reports *The password works*, set `[inverter] password = "1234"`; it is then entered before every write.
+5. Set `[control] pin = "…"` to enable changes, restart, change **output priority** once from the Inverter page
    and confirm it on the inverter's display before using the other controls.
 
 ### First run against a real BMS
@@ -93,15 +103,43 @@ Logs: `journalctl -u ray-vault -f`. Backup while running: `sqlite3 /var/lib/ray-
 ## Inverter control and safety
 
 Settings are defined once in the profile (`ray_vault/inverter/profiles/hf.py`) and the dashboard builds its
-forms from them. HF2430 controls: output and charger priority; total, mains and PV charge current limits;
-stop-charging current and boost time; charge/discharge cut-off SOC; the battery protection voltages
-(over-voltage, charge limit, boost, float, over-discharge and its return, discharge limit); and the SBU switching
-pair: `Switch to mains below` (E01B) and `Switch back to battery above` (E022). The pair must satisfy
-switch-to-mains < switch-back ≤ charge limit, so the inverter can't flap between sources or get stuck on mains.
+forms from them. Each setting carries its **keypad number** from the inverter's setup menu (section 4.2 of the HF
+user manual in `docs/inverter/`), shown as `[04]` on the Inverter page, with the manual's description and range:
 
-The HF series has **no time-of-use charge/discharge slots** and switches between mains and battery by battery
-**voltage** rather than by SOC; SOC-based switching exists only on SRNE hybrid models. A profile for another model
-can add those registers.
+| Keypad | Setting | Register | | Keypad | Setting | Register |
+|---|---|---|---|---|---|---|
+| 01 | Output source priority | E204 | | 20 | Equalization interval | E013 |
+| 02 | Output frequency (read-only) | E209 | | 22 | Power saving mode | E20C |
+| 03 | AC input voltage range | E20B | | 23 | Restart after overload | E20D |
+| 04 | Battery → mains voltage | E01B | | 24 | Restart after over-temperature | E20E |
+| 05 | Mains → battery voltage | E022 | | 25 | Alarm buzzer | E210 |
+| 06 | Charger source priority | E20F | | 26 | Beep on input source change | E211 |
+| 07 | Max charge current | E20A | | 27 | Switch to mains on overload | E212 |
+| 08 | Battery type (read-only) | E004 | | 28 | Max mains charge current | E205 |
+| 09 | Boost charge voltage | E008 | | 35 | Under-voltage recovery point | E00B |
+| 10 | Boost charge time | E012 | | 37 | Fully charged recovery point | E00A |
+| 11 | Floating charge voltage | E009 | | 38 | AC output voltage (read-only) | E208 |
+| 12 | Over-discharge voltage | E00D | | 57 | Stop charging current | E01C |
+| 13 | Over-discharge delay | E010 | | 58 | Discharge alarm SOC | E01E |
+| 14 | Under-voltage alarm | E00C | | 59 | Cut-off discharge SOC | E00F |
+| 15 | Discharge limit voltage | E00E | | 60 | Cut-off charge SOC | E01D |
+| 16 | Equalization enable | E206 | | 61 | Battery → mains SOC | E01F |
+| 17 | Equalization voltage | E007 | | 62 | Mains → battery SOC | E020 |
+| 18 | Equalization time | E011 | | — | Over-voltage disconnect | E005 |
+| 19 | Equalization timeout | E023 | | — | Charge limit voltage | E006 |
+| | | | | — | Max PV charge current | E001 |
+
+`—` = Modbus only (not in the keypad menu). Keypad items without a documented register (21 equalize now, 29 split
+phase, 32 RS485-2 mode, 33 BMS protocol, 34 hybrid output, 40 upgrade) are listed as *keypad only*. Output frequency,
+output voltage and battery type are shown but can only be changed on the keypad.
+
+The SOC settings [58]–[62] follow the newer SRNE register layout (E00F = discharge cut-off, E01D–E020), which matches
+the manual's defaults. The older HF register sheet packs two SOC values into E00F; if the inverter reports such a
+value (above 100), the SOC settings become read-only and the page says to use the keypad.
+
+Ordering rules from the manual are enforced: [04] ≤ [14], [04] < [05], [35] ≤ [05], [05] ≤ charge limit, float ≤
+boost ≤ charge limit ≤ over-voltage, [61] < [62], [59] < [60]. That way the inverter can't flap between sources or
+get stuck on mains. The HF series has no time-of-use charge/discharge slots.
 
 A write is refused, and nothing is sent to the inverter, unless all of these pass:
 
@@ -113,7 +151,9 @@ A write is refused, and nothing is sent to the inverter, unless all of these pas
    voltages must stay 50 mV below the BMS over-voltage limit and discharge voltages 50 mV above its under-voltage
    limit (cell count and limits are read live from the JK BMS; if the BMS is offline these writes are refused).
 
-Then the value is written, read back, and must match. Every change is logged as an `inverter_setting` event with
+Then the value is written, read back, and must match. HF writes use Modbus function 10H (write multiple), the only
+write the HF protocol documents. Single-register writes (06H) to the battery settings were refused with
+"permission denied" on an HF2430. If a firmware rejects 10H as unknown, Ray Vault falls back to 06H. Every change is logged as an `inverter_setting` event with
 old → new and the client address; changes made on the inverter's own keypad show up as `settings_changed`.
 
 ## Link recovery

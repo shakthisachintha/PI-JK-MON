@@ -109,6 +109,10 @@ def validate_value(spec: SettingSpec, value, factor: float = 1.0) -> float:
     return round(value / factor, 6)
 
 
+def _name(spec: SettingSpec) -> str:
+    return f"{spec.label} [{spec.keypad:02d}]" if spec.keypad is not None else spec.label
+
+
 class Controller:
     def __init__(self, driver: InverterDriver, guard: PinGuard, bms_limits=lambda: None) -> None:
         self.driver = driver
@@ -118,6 +122,11 @@ class Controller:
     @property
     def writable(self) -> bool:
         return self.guard.enabled
+
+    def unavailable(self) -> dict[str, str]:
+        """{setting key: reason} for settings this unit's firmware maps differently (from the profile's check)."""
+        check = self.driver.profile.layout_check
+        return check(self.driver.state.regs) if check else {}
 
     def _check_ordering(self, key: str, new_display: float) -> None:
         d = self.driver
@@ -131,8 +140,10 @@ class Controller:
                 continue
             ok = va <= vb + 1e-9 if op == "<=" else va < vb - 1e-9
             if not ok:
-                la, lb = prof.setting(a).label, prof.setting(b).label
-                raise ControlError(f"{la} ({va} V) must be {'≤' if op == '<=' else '<'} {lb} ({vb} V)")
+                sa, sb = prof.setting(a), prof.setting(b)
+                raise ControlError(
+                    f"{_name(sa)} ({va} {sa.unit}) must be {'≤' if op == '<=' else '<'} {_name(sb)} ({vb} {sb.unit})"
+                )
 
     def _check_bms(self, spec: SettingSpec, display: float) -> None:
         if not (spec.charge_side or spec.discharge_side):
@@ -159,18 +170,20 @@ class Controller:
 
     def _hint(self, spec: SettingSpec, e: Exception) -> str:
         code = getattr(e, "code", None)
-        if code in (7, 11) and spec.battery_scaled:
-            try:
-                bt_spec = self.driver.profile.setting("battery_type")
-            except KeyError:
-                return ""
-            bt = self.driver.setting_value(bt_spec)
-            label = dict(bt_spec.options).get(bt, f"type {bt}") if bt is not None else "unknown"
-            if bt != 0:
-                return (
-                    f". The battery type is {label}: SRNE inverters normally only accept battery voltage changes "
-                    "when the battery type is User defined (USE)."
-                )
+        if code == 11:
+            level = self.driver.state.password_level
+            known = {0: "no password entered", 1: "user password entered", 4: "manufacturer password entered"}
+            status = (
+                f" The inverter reports: {known.get(level, f'password level {level}')}." if level is not None else ""
+            )
+            num = f" [{spec.keypad:02d}]" if spec.keypad is not None else ""
+            return (
+                f". The inverter doesn't allow this register to be written at the current access level.{status} "
+                f"Change{num} on the inverter's keypad, or see whether a password unlocks it: "
+                "python -m ray_vault inverter-unlock-test --password NNNN"
+            )
+        if code == 5:
+            return ". The [inverter] password in the config is wrong."
         if code == 9:
             return ". Unlock the inverter's user password on its keypad, or clear it, and try again."
         return ""
@@ -192,10 +205,12 @@ class Controller:
             raise ControlError("system voltage unknown; can't convert battery voltages", 409)
         reg_value = validate_value(spec, value, spec.factor(sv))
         display = spec.to_display(reg_value, sv)
+        if reason := self.unavailable().get(key):
+            raise ControlError(f"{spec.label}: {reason}", 409)
         if spec.danger and not confirm:
             raise ControlError(f"{spec.label} can damage the battery if wrong; resend with confirm=true", 428)
+        self._check_ordering(key, display)
         if spec.battery_scaled:
-            self._check_ordering(key, display)
             self._check_bms(spec, display)
 
         old = d.setting_value(spec)
@@ -215,10 +230,14 @@ class Controller:
         d = self.driver
         sv = d.system_voltage
         groups: dict[str, list] = {}
+        unavailable = self.unavailable()
         for spec in d.profile.settings:
             item = spec.describe(sv)
             item["value"] = d.setting_value(spec)
-            if spec.writable and not self.writable:
+            if reason := unavailable.get(spec.key):
+                item["writable"] = False
+                item["unavailable"] = reason
+            elif spec.writable and not self.writable:
                 item["writable"] = False
             groups.setdefault(spec.group, []).append(item)
         limits = self.bms_limits()
@@ -232,4 +251,5 @@ class Controller:
             if limits is None
             else {"cell_count": limits.cell_count, "cell_ovp": limits.cell_ovp, "cell_uvp": limits.cell_uvp},
             "groups": [{"name": g, "settings": items} for g, items in groups.items()],
+            "keypad_only": [{"keypad": n, "label": label, "reason": why} for n, label, why in d.profile.keypad_only],
         }

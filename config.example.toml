@@ -38,6 +38,9 @@ profile = "hf"           # register map: "hf" = SRNE HF series (HF2430). Verify 
 poll_interval_s = 2
 settings_poll_s = 60
 timeout_s = 1.0
+# Inverter password, entered over Modbus before each settings write. Only needed if writes are refused with
+# "permission denied"; find a working one with: python -m ray_vault inverter-unlock-test --password NNNN
+password = ""
 
 [control]
 # PIN required to change inverter settings from the dashboard. Leave empty to keep settings read-only.

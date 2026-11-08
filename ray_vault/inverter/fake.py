@@ -20,7 +20,7 @@ FAKE_SETTINGS = {
     0xE001: 60,  # PV charge current A
     0xE002: 100,  # capacity Ah
     0xE003: 24,  # system voltage
-    0xE004: 4,  # battery type (raw)
+    0xE004: 8,  # battery type LF08 (8S LFP)
     0xE005: 146,  # over-voltage 14.6 -> 29.2 V
     0xE006: 144,  # charge limit 14.4 -> 28.8 V
     0xE007: 142,
@@ -31,18 +31,33 @@ FAKE_SETTINGS = {
     0xE00C: 120,
     0xE00D: 116,  # over-discharge 11.6 -> 23.2 V
     0xE00E: 110,  # discharge limit 11.0 -> 22.0 V
-    0xE00F: (100 << 8) | 15,  # charge cut-off 100 %, discharge cut-off 15 %
-    0xE010: 60,
+    0xE00F: 15,  # discharge cut-off SOC %
+    0xE010: 5,  # over-discharge delay s
     0xE011: 120,
     0xE012: 120,
     0xE013: 30,
     0xE01B: 120,  # switch to mains 12.0 -> 24.0 V
     0xE01C: 20,
+    0xE01D: 100,  # charge cut-off SOC %
+    0xE01E: 20,  # low SOC alarm %
+    0xE01F: 10,  # switch to mains SOC %
+    0xE020: 100,  # switch back to battery SOC %
     0xE022: 132,  # switch back to battery 13.2 -> 26.4 V
+    0xE023: 240,
     0xE204: 2,  # SBU
     0xE205: 100,  # mains charge 10.0 A
+    0xE206: 0,  # equalization off
+    0xE208: 2300,  # 230.0 V
+    0xE209: 5000,  # 50.00 Hz
     0xE20A: 400,  # max charge 40.0 A
+    0xE20B: 1,  # narrow (UPS)
+    0xE20C: 0,
+    0xE20D: 1,
+    0xE20E: 1,
     0xE20F: 0,  # PV preferred
+    0xE210: 1,
+    0xE211: 1,
+    0xE212: 1,
 }
 
 INFO = {
@@ -134,6 +149,11 @@ class FakeBus:
         self.silent: set[int] = set()  # tests: registers that time out instead of being rejected
         self.max_read = 12  # registers per read, as on the real HF2430
         self.reads: list[int] = []  # tests: sizes of block reads
+        self.write_functions = {6, 16}  # Modbus write function codes this fake accepts
+        self.functions: list[int] = []  # tests: function code of each write
+        self.password: int | None = None  # tests: password that E203 accepts
+        self.locked: set[int] = set()  # tests: registers that need a password entered (else code 11)
+        self.regs[0x0211] = 0  # password level: none entered
         self.fail_next = 0  # tests: make the next N calls raise NoResponse
         self.port_missing = False  # tests: simulate an unplugged adapter
         self.writes: list[tuple[int, int]] = []
@@ -198,7 +218,7 @@ class FakeBus:
         if a in self.silent:
             raise NoResponse(f"0x{a:04X} timed out")
         if 0x0100 <= a < 0x0300:
-            return self._live().get(a, 0)
+            return self._live().get(a, self.regs.get(a, 0))
         return self.regs.get(a, 0)
 
     async def read_block(self, start: int, count: int) -> list[int]:
@@ -218,9 +238,20 @@ class FakeBus:
         self._check()
         return self._get(address)
 
-    async def write_register(self, address: int, raw: int) -> None:
+    async def write_register(self, address: int, raw: int, function: int = 16) -> None:
         await asyncio.sleep(0)
         self._check()
+        if function not in self.write_functions:
+            raise Refused(1, "illegal function")
+        self.functions.append(function)
+        if address == 0xE203:
+            if raw != self.password:
+                raise Refused(5, "password error")
+            self.writes.append((address, raw))
+            self.regs[0x0211] = 1
+            return
+        if address in self.locked and self.regs[0x0211] < 1:
+            raise Refused(11, "permission denied")
         if not 0xE000 <= address < 0xE300:
             raise IllegalAddress(f"0x{address:04X} is not writable")
         self.writes.append((address, raw))

@@ -18,7 +18,7 @@ from ..core.clock import now_ms
 from ..core.service import BackgroundWriter
 from ..core.store import Store
 from ..core.timeseries import TimeSeries
-from .bus import Bus, BusError, IllegalAddress, NoResponse, PortError
+from .bus import Bus, BusError, IllegalAddress, NoResponse, PortError, Refused
 from .registers import Block, SettingSpec
 from .series import SPEC, sample_row
 
@@ -52,6 +52,7 @@ class InverterState:
     live_ts: int | None = None
     fault_codes: list[int] = field(default_factory=list)
     regs: dict[int, int] = field(default_factory=dict)  # settings registers, raw
+    password_level: int | None = None  # 0 none, 1 user, 4 manufacturer (profile.password_status_register)
     settings_ts: int | None = None
     device: dict | None = None
     device_ts: int | None = None
@@ -99,12 +100,15 @@ class InverterDriver:
         settings_poll_s: float = 60,
         stale_s: float = 10,
         state: InverterState | None = None,
+        password: int | None = None,
     ) -> None:
         self.store = store
         self.writer = writer
         self.bus = bus
         self.profile_module = profile
         self.profile = profile.PROFILE
+        self._write_function = self.profile.write_function
+        self.password = password  # entered into the password input register before each settings write
         self.poll_interval_s = poll_interval_s
         self.settings_poll_s = settings_poll_s
         self.stale_s = stale_s
@@ -152,7 +156,8 @@ class InverterDriver:
             if spec.byte is not None:
                 current = await self.bus.read_register(spec.address)
             raw = spec.to_raw(register_value, current)
-            await self.bus.write_register(spec.address, raw)
+            await self._unlock()
+            await self._write(spec.address, raw)
             await asyncio.sleep(0.2)  # some firmwares apply settings a moment after acknowledging
             readback = await self.bus.read_register(spec.address)
             self.state.regs[spec.address] = readback
@@ -160,6 +165,26 @@ class InverterDriver:
             if readback != raw:
                 raise NoResponse(f"read-back mismatch at 0x{spec.address:04X}: wrote {raw}, read {readback}")
             return readback
+
+    async def _unlock(self) -> None:
+        """Enter the configured password (if any), then refresh the password level."""
+        reg = self.profile.password_input_register
+        if self.password is None or reg is None:
+            return
+        await self._write(reg, self.password)
+        if (status := self.profile.password_status_register) is not None:
+            self.state.password_level = await self.bus.read_register(status)
+
+    async def _write(self, address: int, raw: int) -> None:
+        fc = self._write_function
+        try:
+            await self.bus.write_register(address, raw, function=fc)
+        except Refused as e:
+            if e.code != 1 or fc == 6:  # 1 = illegal command: this firmware doesn't know the function code
+                raise
+            log.warning("inverter rejected write function %d; falling back to 6 (write single)", fc)
+            self._write_function = 6
+            await self.bus.write_register(address, raw, function=6)
 
     # --- main loop ---
 
@@ -308,6 +333,8 @@ class InverterDriver:
         live["machine_state_label"] = (
             self.profile.machine_states.get(state, f"State {state}") if state is not None else None
         )
+        if (a := self.profile.password_status_register) is not None:
+            self.state.password_level = regs.get(a)
         live["fault_bits"], codes = self.profile_module.decode_faults(regs)
         if codes != self.state.fault_codes:
             if codes:

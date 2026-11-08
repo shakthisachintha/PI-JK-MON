@@ -25,6 +25,28 @@ function storePin(pin: string | null) {
   } catch {}
 }
 
+export function keypadNo(n: number): string {
+  return `[${String(n).padStart(2, "0")}]`;
+}
+
+function KeypadBadge({ n }: { n: number | null }) {
+  return n == null ? (
+    <span
+      className="rounded border border-dashed border-border px-1 font-mono text-[10px] text-muted"
+      title="Not in the inverter's keypad menu; Modbus only"
+    >
+      —
+    </span>
+  ) : (
+    <span
+      className="rounded border border-border bg-surface-2 px-1 font-mono text-[11px] text-muted tabular-nums"
+      title={`Setting ${keypadNo(n)} in the inverter's setup menu`}
+    >
+      {keypadNo(n)}
+    </span>
+  );
+}
+
 function decimals(step: number | undefined): number {
   if (!step || Number.isInteger(step)) return 0;
   return Math.min(3, String(step).split(".")[1]?.length ?? 0);
@@ -70,6 +92,7 @@ function SettingRow({
     <div className="grid gap-x-4 gap-y-1.5 border-b border-border py-3 last:border-0 sm:grid-cols-[minmax(0,1fr)_auto]">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2 font-medium">
+          <KeypadBadge n={item.keypad} />
           {item.label}
           {item.danger ? (
             <span className="rounded-full border border-warn/40 bg-warn/15 px-1.5 text-[10px] font-semibold text-warn uppercase">
@@ -78,6 +101,7 @@ function SettingRow({
           ) : null}
         </div>
         {item.description ? <div className="text-xs text-muted">{item.description}</div> : null}
+        {item.unavailable ? <div className="text-xs text-warn">{item.unavailable}</div> : null}
         {item.writable && item.kind === "number" && item.min != null ? (
           <div className="text-xs text-muted tabular-nums">
             Range {formatSetting(item, item.min)} – {formatSetting(item, item.max)}, step {item.step}
@@ -203,7 +227,7 @@ function ConfirmDialog({
   };
 
   return (
-    <Dialog open title={`Change ${item.label.toLowerCase()}?`} onClose={() => !mutation.isPending && onClose()}>
+    <Dialog open title={`Change ${item.keypad != null ? `${keypadNo(item.keypad)} ` : ""}${item.label.toLowerCase()}?`} onClose={() => !mutation.isPending && onClose()}>
       <form
         className="flex flex-col gap-3"
         onSubmit={(e) => {
@@ -219,7 +243,9 @@ function ConfirmDialog({
         </div>
         {item.danger ? (
           <Banner tone="warn">
-            This is a battery protection voltage. A wrong value can over-charge or over-discharge the pack.
+            {item.unit === "V"
+              ? "This is a battery protection voltage. A wrong value can over-charge or over-discharge the pack."
+              : "This setting affects how the battery is charged. A wrong value can damage the pack."}
             {limits ? (
               <span className="mt-1 block text-xs font-normal">
                 Checked against the BMS: {limits.cell_count} cells, over-voltage {limits.cell_ovp.toFixed(3)} V/cell,
@@ -348,6 +374,25 @@ export function InverterControls() {
               ))}
             </section>
           ))}
+          {data.keypad_only.length ? (
+            <section className="rounded-lg border border-dashed border-border p-3">
+              <h3 className="mb-1 text-sm font-semibold">Keypad only</h3>
+              <p className="mb-2 text-xs text-muted">
+                In the inverter&apos;s setup menu but not available over Modbus. Numbers in brackets match the
+                inverter&apos;s display and its user manual; <span className="font-mono">—</span> marks settings
+                that exist only over Modbus.
+              </p>
+              {data.keypad_only.map((k) => (
+                <div key={k.keypad} className="border-b border-border py-2 last:border-0">
+                  <div className="flex items-center gap-2 font-medium">
+                    <KeypadBadge n={k.keypad} />
+                    {k.label}
+                  </div>
+                  <div className="text-xs text-muted">{k.reason}</div>
+                </div>
+              ))}
+            </section>
+          ) : null}
         </div>
       )}
 

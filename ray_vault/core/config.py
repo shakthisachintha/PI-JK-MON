@@ -56,6 +56,7 @@ class InverterConfig:
     poll_interval_s: float = 2
     settings_poll_s: float = 60
     timeout_s: float = 1.0
+    password: str = ""  # entered (E203) before each settings write; test with inverter-unlock-test
 
 
 @dataclass

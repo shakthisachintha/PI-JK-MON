@@ -2,6 +2,7 @@
 
 python -m ray_vault [--config PATH] [--fake [--seed-days N]] [--dump-frames [DIR]]
 python -m ray_vault probe-inverter [--config PATH] [--port PORT]
+python -m ray_vault inverter-unlock-test [--password N] [--register 0xE022]
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ FAKE_DB_PATH = "./ray-vault-fake.db"
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="ray_vault", description="Ray Vault: JK BMS + SRNE inverter monitor")
-    ap.add_argument("command", nargs="?", choices=["run", "probe-inverter"], default="run")
+    ap.add_argument("command", nargs="?", choices=["run", "probe-inverter", "inverter-unlock-test"], default="run")
     ap.add_argument("--config", help="path to config.toml (default: /etc/ray-vault/config.toml if present)")
     ap.add_argument(
         "--dump-frames",
@@ -42,6 +43,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--fake", action="store_true", help="simulate the BMS and the inverter (no hardware needed)")
     ap.add_argument("--seed-days", type=float, metavar="N", help="with --fake: prefill N days of synthetic history")
     ap.add_argument("--port", help="probe-inverter: serial port (default: inverter.port from the config)")
+    ap.add_argument("--password", type=int, help="inverter-unlock-test: password to enter (E203)")
+    ap.add_argument(
+        "--register",
+        type=lambda s: int(s, 0),
+        default=0xE022,
+        help="inverter-unlock-test: register to rewrite with its current value (default 0xE022)",
+    )
     return ap.parse_args(argv)
 
 
@@ -63,6 +71,16 @@ def seed_history(ctx: AppContext, days: float, interval_s: float) -> None:
         if d is not None:
             d.series.rollup(end)
     log.info("seeding done")
+
+
+def inverter_password(value: str) -> int | None:
+    value = value.strip()
+    if not value:
+        return None
+    if not value.isdigit():
+        log.error("[inverter] password must be digits only; ignoring it")
+        return None
+    return int(value)
 
 
 def build(cfg: Config, args: argparse.Namespace, store: Store, writer: BackgroundWriter) -> AppContext:
@@ -120,6 +138,7 @@ def build(cfg: Config, args: argparse.Namespace, store: Store, writer: Backgroun
             writer,
             bus,
             get_profile(inv.profile),
+            password=inverter_password(inv.password),
             poll_interval_s=inv.poll_interval_s,
             settings_poll_s=inv.settings_poll_s,
             stale_s=cfg.storage.stale_s,
@@ -146,7 +165,7 @@ async def amain(args: argparse.Namespace) -> int:
     logging.basicConfig(level=cfg.log_level, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     logging.getLogger("bleak").setLevel(max(logging.INFO, logging.getLevelName(cfg.log_level)))
 
-    if args.command == "probe-inverter":
+    if args.command in ("probe-inverter", "inverter-unlock-test"):
         return await probe_inverter(cfg, args)
 
     if args.fake:
@@ -228,11 +247,15 @@ async def probe_inverter(cfg: Config, args: argparse.Namespace) -> int:
 
         bus = FakeBus()
     elif not port:
-        print("probe-inverter: no port (set [inverter] port or pass --port)", file=sys.stderr)
+        print(f"{args.command}: no port (set [inverter] port or pass --port)", file=sys.stderr)
         return 2
     else:
         bus = ModbusBus(port, cfg.inverter.slave, cfg.inverter.baudrate, cfg.inverter.timeout_s)
     try:
+        if args.command == "inverter-unlock-test":
+            from .inverter.unlock import unlock_test
+
+            return await unlock_test(bus, get_profile(cfg.inverter.profile), args.password, args.register)
         return await probe(bus, get_profile(cfg.inverter.profile))
     finally:
         await bus.close()
