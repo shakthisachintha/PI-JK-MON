@@ -65,7 +65,7 @@ function PowerToday() {
 export default function OverviewPage() {
   const { data: o, isError } = useOverview();
   const settings = useInverterSettings().data;
-  const priorities = settings?.groups.find((g) => g.name === "Priorities")?.settings ?? [];
+  const priorities = settings?.groups.flatMap((g) => g.settings) ?? []; // look up by key, not group name
   const setting = (k: string): SettingItem | undefined => priorities.find((s) => s.key === k);
 
   const soc = o?.soc ?? null;

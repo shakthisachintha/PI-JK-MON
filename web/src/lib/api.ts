@@ -124,7 +124,14 @@ export interface SystemInfo {
     rssi_quality: "excellent" | "good" | "fair" | "poor" | null;
     rssi_source: "connection" | "scan" | null;
     rssi_age_s: number | null;
-    recovery_stage: "ok" | "rerequesting" | "reconnecting" | "adapter_reset" | "bluetoothd_restart";
+    recovery_stage:
+      | "ok"
+      | "rerequesting"
+      | "reconnecting"
+      | "adapter_reset"
+      | "chip_reset"
+      | "bluetoothd_restart"
+      | "rebooting";
     adapter_resets: number;
     last_adapter_reset_ts: number | null;
     counters: { frames_ok: number; crc_errors: number; reconnects: number; unknown_frames: number };

@@ -117,11 +117,15 @@ chown "root:$SVC_USER" "$CONF"
 chmod 640 "$CONF"
 
 # --- polkit + systemd -----------------------------------------------------------------
-echo "==> polkit rule (lets the service restart bluetoothd)"
+echo "==> polkit rule (lets the service restart bluetoothd and reset the Bluetooth chip)"
 install -m 0644 "$SRC/deploy/50-$NAME.rules" "/etc/polkit-1/rules.d/50-$NAME.rules"
+# Root-owned helper run by $NAME-bt-reset.service: reloads the Bluetooth driver when the chip is wedged.
+install -d -m 0755 /opt/$NAME/bin
+install -m 0755 -o root -g root "$SRC/deploy/bt-chip-reset.sh" "/opt/$NAME/bin/bt-chip-reset.sh"
 
 echo "==> systemd"
 install -m 0644 "$SRC/deploy/$NAME.service" "/etc/systemd/system/$NAME.service"
+install -m 0644 "$SRC/deploy/$NAME-bt-reset.service" "/etc/systemd/system/$NAME-bt-reset.service"
 systemctl daemon-reload
 systemctl enable "$NAME"
 systemctl restart "$NAME"

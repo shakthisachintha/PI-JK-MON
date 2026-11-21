@@ -24,6 +24,9 @@ const EVENT_TONE: Record<string, string> = {
   inverter_setting_failed: "text-bad",
   adapter_reset: "text-warn",
   bluetoothd_restart: "text-warn",
+  bt_chip_reset: "text-warn",
+  host_reboot: "text-bad",
+  host_reboot_failed: "text-bad",
   cell_info_rerequest: "text-warn",
   settings_changed: "text-warn",
 };

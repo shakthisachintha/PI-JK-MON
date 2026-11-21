@@ -23,7 +23,7 @@ from collections.abc import Callable
 from ..core.clock import now_ms
 from ..core.service import FatalDriverError
 from . import protocol as p
-from .bt_admin import connection_rssi, power_cycle_adapter, restart_bluetoothd
+from .bt_admin import connection_rssi, power_cycle_adapter, reboot_host, reset_bt_chip, restart_bluetoothd
 from .source import OnEvent, OnFrame, OnLinkChange
 from .state import LINK_CONNECTED, LINK_CONNECTING, LINK_DISCONNECTED, LINK_SCANNING, BleStats
 
@@ -98,6 +98,7 @@ class BleSource:
         restart_after_resets: int = 3,
         rssi_poll_s: float = 30,
         stats: BleStats | None = None,
+        reboot_after_s: float = 0,
     ) -> None:
         self.mac = mac.lower()
         self.adapter = adapter
@@ -106,6 +107,8 @@ class BleSource:
         self.rssi_poll_s = rssi_poll_s
         self.stats = stats or BleStats()
         self.ladder = RecoveryLadder(adapter_reset_after_s, adapter_reset_max_interval_s, restart_after_resets)
+        self.reboot_after_s = reboot_after_s  # 0 = never reboot the host
+        self._reboot_requested = False
 
     async def run(self, on_frame: OnFrame, on_link_change: OnLinkChange, on_event: OnEvent) -> None:
         failures = 0
@@ -129,27 +132,65 @@ class BleSource:
                 log.warning("BLE error (%s: %s); retrying in %ds", type(e).__name__, e, delay)
                 await asyncio.sleep(delay)
 
+    async def _reset_bluetooth(self, stalled: float, on_link_change: OnLinkChange, on_event: OnEvent) -> None:
+        """Adapter power-cycles didn't help: reset the Bluetooth chip (driver reload, which also restarts
+        bluetoothd). If that isn't available, restart bluetoothd alone; if that fails too, exit for systemd."""
+        on_link_change(LINK_DISCONNECTED)
+        self.stats.recovery_stage = "chip_reset"
+        log.warning(
+            "no cell data for %.0fs after %d adapter reset(s); resetting the Bluetooth chip",
+            stalled,
+            self.ladder.resets,
+        )
+        try:
+            await reset_bt_chip()
+            on_event("bt_chip_reset", f"after {stalled:.0f}s without cell data (Bluetooth driver reloaded)")
+            self.stats.chip_resets += 1
+            return
+        except Exception as e:
+            chip_error = str(e)
+            log.warning("Bluetooth chip reset unavailable (%s); restarting bluetoothd instead", chip_error)
+
+        self.stats.recovery_stage = "bluetoothd_restart"
+        try:
+            await restart_bluetoothd()
+        except Exception as e:
+            detail = (
+                f"no cell data for {stalled:.0f}s; chip reset failed ({chip_error}) and restarting "
+                f"bluetoothd failed ({e}); exiting"
+            )
+            log.error(detail)
+            on_event("service_restart", detail)
+            raise LinkRecoveryExhausted(detail) from e
+        on_event("bluetoothd_restart", f"after {stalled:.0f}s without cell data (chip reset failed: {chip_error})")
+        self.stats.bluetoothd_restarts += 1
+
+    async def _reboot(self, stalled: float, on_event: OnEvent) -> None:
+        """Last resort, only with [bms] reboot_after_s set. At most once per service run; after the reboot the
+        stall clock starts again, so a dead BMS reboots the Pi at most once every reboot_after_s."""
+        self._reboot_requested = True
+        self.stats.recovery_stage = "rebooting"
+        detail = f"no cell data for {stalled:.0f}s (reboot_after_s = {self.reboot_after_s:.0f})"
+        log.error("%s; rebooting the host", detail)
+        on_event("host_reboot", detail)
+        await asyncio.sleep(3)  # let the event reach the database
+        try:
+            await reboot_host()
+            await asyncio.sleep(120)  # the system is going down
+        except Exception as e:
+            log.error("reboot failed: %s", e)
+            on_event("host_reboot_failed", str(e))
+
     async def _recover_if_stalled(self, on_link_change: OnLinkChange, on_event: OnEvent) -> None:
         action = self.ladder.next_action()
         if action is None:
             return
         stalled = self.ladder.stalled_s()
+        if self.reboot_after_s and stalled >= self.reboot_after_s and not self._reboot_requested:
+            await self._reboot(stalled, on_event)
         if action == "restart":
-            self.stats.recovery_stage = "bluetoothd_restart"
-            on_link_change(LINK_DISCONNECTED)
-            log.warning(
-                "no cell data for %.0fs after %d adapter reset(s); restarting bluetoothd", stalled, self.ladder.resets
-            )
-            try:
-                await restart_bluetoothd()
-            except Exception as e:
-                detail = f"no cell data for {stalled:.0f}s; restarting bluetoothd failed ({e}); exiting"
-                log.error(detail)
-                on_event("service_restart", detail)
-                raise LinkRecoveryExhausted(detail) from e
-            on_event("bluetoothd_restart", f"after {stalled:.0f}s without cell data")
+            await self._reset_bluetooth(stalled, on_link_change, on_event)
             self.ladder.did_restart()
-            self.stats.bluetoothd_restarts += 1
             return
 
         self.stats.recovery_stage = "adapter_reset"

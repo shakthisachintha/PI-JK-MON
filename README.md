@@ -165,9 +165,14 @@ old → new and the client address; changes made on the inverter's own keypad sh
 | 5 s | Re-send the cell-info request | `cell_info_rerequest` |
 | 20 s | Disconnect, rescan, reconnect | `ble_timeout`, `ble_disconnected` |
 | 2 min, then 4, 8 … (cap 30 min) | Power-cycle the Bluetooth adapter | `adapter_reset` |
-| after 3 resets | Restart `bluetooth.service` (in-process, via polkit; the inverter keeps running) | `bluetoothd_restart` |
+| after 3 resets | Reset the Bluetooth chip: reload its driver (`hci_uart`/`btusb`) and restart bluetoothd, via the root oneshot `ray-vault-bt-reset.service` (started through polkit; the inverter keeps running) | `bt_chip_reset` |
+| if the chip reset isn't available | Restart `bluetooth.service` only | `bluetoothd_restart` |
+| `[bms] reboot_after_s` (off by default) | Reboot the Pi, at most once per that period | `host_reboot` |
 
-Only if restarting bluetoothd fails does the service exit (code 75); systemd then restarts bluetoothd and the service.
+The chip reset handles a wedged controller (adapter resets fail with `org.bluez.Error.Failed: Busy` and btmgmt
+timeouts), which happens on the Pi 3's built-in Bluetooth after an under-voltage; restarting bluetoothd doesn't fix
+it. By hand: `sudo systemctl start ray-vault-bt-reset`. Only if both the chip reset and the bluetoothd restart fail
+does the service exit (code 75); systemd then restarts bluetoothd and the service.
 
 **Inverter (RS485):** a failed poll is retried on the next tick; 3 failures in a row reopen the serial port
 (`inverter_no_response`); a missing adapter (`inverter_port_missing`) is retried with backoff. Using the

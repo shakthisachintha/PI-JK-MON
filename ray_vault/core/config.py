@@ -42,7 +42,8 @@ class BmsConfig:
     link_timeout_s: float = 20  # no cell-data frame for this long while connected -> reconnect
     adapter_reset_after_s: float = 120  # no cell data for this long -> power-cycle the BT adapter
     adapter_reset_max_interval_s: float = 1800  # backoff cap between adapter resets
-    restart_after_resets: int = 3  # adapter resets without recovery -> restart bluetoothd (0 = never)
+    restart_after_resets: int = 3  # adapter resets without recovery -> reset the Bluetooth chip (0 = never)
+    reboot_after_s: float = 0  # no BMS data for this long -> reboot the Pi (0 = never)
     rssi_poll_s: float = 30
 
 

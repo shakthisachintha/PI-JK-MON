@@ -159,6 +159,7 @@ def test_stalled_source_resets_adapter_then_gives_up(monkeypatch):
 
     monkeypatch.setattr(ble_client, "power_cycle_adapter", fake_reset)
     monkeypatch.setattr(ble_client, "restart_bluetoothd", restart_fails)
+    monkeypatch.setattr(ble_client, "reset_bt_chip", restart_fails)
     src = BleSource("aa:bb:cc:dd:ee:ff", adapter_reset_after_s=0, restart_after_resets=2)
     events = []
 
@@ -184,6 +185,11 @@ def test_stalled_source_restarts_bluetoothd_in_process(monkeypatch):
 
     monkeypatch.setattr(ble_client, "power_cycle_adapter", ok)
     monkeypatch.setattr(ble_client, "restart_bluetoothd", ok)
+
+    async def no_chip_reset():
+        raise RuntimeError("ray-vault-bt-reset.service is not-found")
+
+    monkeypatch.setattr(ble_client, "reset_bt_chip", no_chip_reset)
     src = BleSource(
         "aa:bb:cc:dd:ee:ff", adapter_reset_after_s=0, adapter_reset_max_interval_s=0, restart_after_resets=1
     )
@@ -247,3 +253,68 @@ def test_pi_readers(monkeypatch, tmp_path):
     assert d["power"]["under_voltage_occurred"] and not d["power"]["under_voltage_now"]
     assert d["cpu_percent"] is None  # first sample has nothing to diff against
     assert mon._collect()["cpu_percent"] == 50.0  # 100 busy of 200 jiffies (iowait counts as idle)
+
+
+def test_stalled_source_resets_the_bluetooth_chip(monkeypatch):
+    """A wedged controller ("Busy", btmgmt timeouts) needs a driver reload; bluetoothd restarts don't help."""
+    calls = []
+
+    async def busy(_adapter):
+        raise RuntimeError("dbus: org.bluez.Error.Failed: Busy; btmgmt: timeout")
+
+    async def chip_reset():
+        calls.append("chip")
+        return "success"
+
+    async def restart():
+        calls.append("bluetoothd")
+
+    monkeypatch.setattr(ble_client, "power_cycle_adapter", busy)
+    monkeypatch.setattr(ble_client, "reset_bt_chip", chip_reset)
+    monkeypatch.setattr(ble_client, "restart_bluetoothd", restart)
+    src = BleSource("aa:bb:cc:dd:ee:ff", adapter_reset_after_s=0, restart_after_resets=2)
+    events = []
+
+    async def go():
+        for _ in range(3):
+            await src._recover_if_stalled(lambda _s: None, lambda t, d=None: events.append(t))
+            src.ladder.next_reset_at = 0
+
+    asyncio.run(go())
+    assert events == ["adapter_reset", "adapter_reset", "bt_chip_reset"]
+    assert calls == ["chip"] and src.stats.chip_resets == 1
+
+
+def test_reboot_after_long_stall_only_once(monkeypatch):
+    reboots = []
+
+    async def ok(*_a):
+        return "test"
+
+    async def reboot():
+        reboots.append(1)
+
+    async def no_sleep(_s):
+        pass
+
+    monkeypatch.setattr(ble_client, "power_cycle_adapter", ok)
+    monkeypatch.setattr(ble_client, "reboot_host", reboot)
+    monkeypatch.setattr(ble_client.asyncio, "sleep", no_sleep)
+    now = [0.0]
+    src = BleSource("aa:bb:cc:dd:ee:ff", adapter_reset_after_s=60, restart_after_resets=0, reboot_after_s=3600)
+    src.ladder.clock = lambda: now[0]
+    src.ladder.good()
+    events = []
+
+    async def tick(t):
+        now[0] = t
+        await src._recover_if_stalled(lambda _s: None, lambda e, d=None: events.append(e))
+
+    async def go():
+        await tick(120)  # adapter reset, no reboot yet
+        await tick(4000)  # past reboot_after_s
+        await tick(9000)
+
+    asyncio.run(go())
+    assert reboots == [1]
+    assert events.count("host_reboot") == 1

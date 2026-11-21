@@ -1,0 +1,8 @@
+[Unit]
+Description=Ray Vault: reset the Bluetooth controller (driver reload)
+# Started on demand by ray-vault's BLE recovery (allowed by the polkit rule); never enabled.
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ray-vault/bin/bt-chip-reset.sh
+TimeoutStartSec=90

@@ -85,6 +85,104 @@ async def restart_bluetoothd(settle_s: float = 5) -> None:
     await asyncio.sleep(settle_s)  # let bluetoothd re-register the adapter
 
 
+CHIP_RESET_UNIT = "ray-vault-bt-reset.service"
+
+
+async def _systemd_call(
+    bus,
+    member: str,
+    signature: str,
+    body: list,
+    path: str = "/org/freedesktop/systemd1",
+    interface: str = "org.freedesktop.systemd1.Manager",
+):
+    from dbus_fast import Message, MessageType
+
+    reply = await bus.call(
+        Message(
+            destination="org.freedesktop.systemd1",
+            path=path,
+            interface=interface,
+            member=member,
+            signature=signature,
+            body=body,
+        )
+    )
+    if reply.message_type == MessageType.ERROR:
+        raise RuntimeError(f"{reply.error_name}: {' '.join(map(str, reply.body))}")
+    return reply.body
+
+
+async def reset_bt_chip(timeout_s: float = 90, settle_s: float = 5) -> str:
+    """Reset the Bluetooth controller by starting the root oneshot unit that reloads its driver
+    (deploy/bt-chip-reset.sh). Fixes a wedged chip that bluetoothd restarts can't ("Busy", btmgmt timeouts).
+
+    Allowed for the service user by deploy/50-ray-vault.rules. Waits for the unit to finish; raises if it isn't
+    installed, isn't permitted or fails. Returns the unit's result ("success").
+    """
+    from dbus_fast import BusType
+    from dbus_fast.aio import MessageBus
+
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    try:
+        (path,) = await _systemd_call(bus, "LoadUnit", "s", [CHIP_RESET_UNIT])
+        (load,) = await _systemd_call(
+            bus, "Get", "ss", ["org.freedesktop.systemd1.Unit", "LoadState"], path, "org.freedesktop.DBus.Properties"
+        )
+        if load.value != "loaded":
+            raise RuntimeError(f"{CHIP_RESET_UNIT} is {load.value} (run deploy/install.sh to install it)")
+        await _systemd_call(bus, "StartUnit", "ss", [CHIP_RESET_UNIT, "replace"])
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        await asyncio.sleep(1)
+        while True:
+            (state,) = await _systemd_call(
+                bus,
+                "Get",
+                "ss",
+                ["org.freedesktop.systemd1.Unit", "ActiveState"],
+                path,
+                "org.freedesktop.DBus.Properties",
+            )
+            if state.value not in ("activating", "deactivating", "reloading"):
+                break
+            if loop.time() > deadline:
+                raise RuntimeError(f"{CHIP_RESET_UNIT} still running after {timeout_s:.0f}s")
+            await asyncio.sleep(1)
+        (result,) = await _systemd_call(
+            bus, "Get", "ss", ["org.freedesktop.systemd1.Service", "Result"], path, "org.freedesktop.DBus.Properties"
+        )
+        if result.value != "success":
+            raise RuntimeError(f"{CHIP_RESET_UNIT} failed: {result.value} (see journalctl -u {CHIP_RESET_UNIT})")
+    finally:
+        bus.disconnect()
+    await asyncio.sleep(settle_s)  # let bluetoothd re-register the adapter
+    return result.value
+
+
+async def reboot_host() -> None:
+    """Reboot the machine via logind (allowed for the service user by the polkit rule). Raises on failure."""
+    from dbus_fast import BusType, Message, MessageType
+    from dbus_fast.aio import MessageBus
+
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    try:
+        reply = await bus.call(
+            Message(
+                destination="org.freedesktop.login1",
+                path="/org/freedesktop/login1",
+                interface="org.freedesktop.login1.Manager",
+                member="Reboot",
+                signature="b",
+                body=[False],
+            )
+        )
+        if reply.message_type == MessageType.ERROR:
+            raise RuntimeError(f"{reply.error_name}: {' '.join(map(str, reply.body))}")
+    finally:
+        bus.disconnect()
+
+
 async def power_cycle_adapter(adapter: str, settle_s: float = 3) -> str:
     """Power the adapter off and on again. Returns the method used; raises RuntimeError if all fail."""
     errors = []

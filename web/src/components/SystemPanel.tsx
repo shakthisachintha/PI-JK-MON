@@ -15,7 +15,9 @@ const STAGE: Record<BleInfo["recovery_stage"], { text: string; tone: Tone }> = {
   rerequesting: { text: "Re-requesting data", tone: "warn" },
   reconnecting: { text: "Reconnecting", tone: "warn" },
   adapter_reset: { text: "Resetting adapter", tone: "bad" },
+  chip_reset: { text: "Resetting Bluetooth chip", tone: "bad" },
   bluetoothd_restart: { text: "Restarting Bluetooth", tone: "bad" },
+  rebooting: { text: "Rebooting the Pi", tone: "bad" },
 };
 
 const INVERTER_LINK: Record<InverterInfo["link"], { text: string; tone: Tone }> = {

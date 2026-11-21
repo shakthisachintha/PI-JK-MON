@@ -30,8 +30,11 @@ class BleStats:
     rssi_source: str | None = None  # "connection" (live) or "scan" (last advertisement)
     adapter_resets: int = 0
     bluetoothd_restarts: int = 0
+    chip_resets: int = 0
     last_adapter_reset_ts: int | None = None
-    recovery_stage: str = "ok"  # ok | rerequesting | reconnecting | adapter_reset | bluetoothd_restart
+    recovery_stage: str = (
+        "ok"  # ok | rerequesting | reconnecting | adapter_reset | chip_reset | bluetoothd_restart | rebooting
+    )
 
 
 @dataclass

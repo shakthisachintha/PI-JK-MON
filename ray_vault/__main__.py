@@ -111,6 +111,7 @@ def build(cfg: Config, args: argparse.Namespace, store: Store, writer: Backgroun
                 restart_after_resets=b.restart_after_resets,
                 rssi_poll_s=b.rssi_poll_s,
                 stats=bms_state.ble,
+                reboot_after_s=b.reboot_after_s,
             )
         dump_dir = None
         if args.dump_frames is not None:
